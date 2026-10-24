@@ -263,17 +263,25 @@ export default function OfflineImportModal({
             </p>
           </div>
 
-          {/* STEP 2: DOWNLOAD SAMPLE EXCEL FOR SELECTED CHANNEL */}
-          <div className="flex items-center justify-between p-4 rounded-xl bg-muted/20 border border-border">
-            <div>
-              <div className="text-xs font-semibold">Generate Sample Offline Excel</div>
+          {/* 1-CLICK DOWNLOAD PREMADE RELIANCE DIGITAL EXCEL */}
+          <div className="flex items-center justify-between p-4 rounded-xl bg-muted/40 border border-border">
+            <div className="space-y-0.5">
+              <div className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                <FileSpreadsheet className="w-4 h-4 text-emerald-500" />
+                Reliance_Digital_Offline_Sales.xlsx
+              </div>
               <div className="text-[11px] text-muted-foreground">
-                Pre-formatted for <strong className="text-foreground">{activeOfflineChannel.name}</strong> with Indian customers & ₹ pricing
+                Pre-made POS spreadsheet (8 Indian retail transactions, ₹22,992 total revenue)
               </div>
             </div>
-            <Button variant="outline" size="sm" onClick={downloadSampleTemplate} className="gap-2">
-              <Download className="w-4 h-4 text-emerald-500" /> Download .XLSX
-            </Button>
+            <a
+              href="/Reliance_Digital_Offline_Sales.xlsx"
+              download="Reliance_Digital_Offline_Sales.xlsx"
+            >
+              <Button size="sm" variant="outline" className="gap-2 border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10 text-xs">
+                <Download className="w-4 h-4 text-emerald-400" /> Download Pre-made File
+              </Button>
+            </a>
           </div>
 
           {/* STEP 3: UPLOAD FILE */}
