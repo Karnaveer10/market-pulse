@@ -1,13 +1,15 @@
 import { useState } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import {
-  LayoutDashboard, Package, Megaphone, Users, Radio, MousePointerClick,
-  BarChart3, Menu, X, ChevronLeft, Search, Bell, Moon, Sun
+  LayoutDashboard, ShoppingBag, Package, Megaphone, Users, Radio, MousePointerClick,
+  BarChart3, Menu, X, ChevronLeft, Search, Bell, Moon, Sun, Activity
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import XRayTraceModal from '@/components/XRayTraceModal';
 
 const navItems = [
   { title: 'Dashboard', path: '/', icon: LayoutDashboard },
+  { title: 'Live Storefront', path: '/store', icon: ShoppingBag, badge: 'Live' },
   { title: 'Products', path: '/products', icon: Package },
   { title: 'Campaigns', path: '/campaigns', icon: Megaphone },
   { title: 'Customers', path: '/customers', icon: Users },
@@ -21,6 +23,7 @@ export default function AppLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isDark, setIsDark] = useState(true);
+  const [xrayOpen, setXrayOpen] = useState(false);
 
   const toggleTheme = () => {
     setIsDark(!isDark);
@@ -140,6 +143,13 @@ export default function AppLayout() {
           </div>
 
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setXrayOpen(true)}
+              className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-500 hover:bg-amber-500/20 text-xs font-semibold transition"
+            >
+              <Activity className="w-3.5 h-3.5 animate-pulse" />
+              AWS X-Ray
+            </button>
             <button className="p-2 rounded-lg hover:bg-muted transition-colors relative">
               <Bell className="w-5 h-5 text-muted-foreground" />
               <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-primary rounded-full" />
@@ -154,6 +164,8 @@ export default function AppLayout() {
           <Outlet />
         </main>
       </div>
+
+      <XRayTraceModal isOpen={xrayOpen} onClose={() => setXrayOpen(false)} />
     </div>
   );
 }

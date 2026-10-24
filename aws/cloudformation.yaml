@@ -1,0 +1,156 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  MarketPulse - Omnichannel Marketing Intelligence & Real-Time Telemetry Pipeline
+  AWS Free-Tier Certified Infrastructure (S3, API Gateway, SQS, Lambda, SNS, X-Ray, CloudWatch)
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 256
+    Runtime: nodejs18.x
+    Tracing: Active # Enables AWS X-Ray distributed tracing on all Lambdas (100k traces/mo FREE)
+    Environment:
+      Variables:
+        IMPORT_BUCKET_NAME: !Ref OfflineImportBucket
+        SNS_BUDGET_ALERTS_TOPIC_ARN: !Ref BudgetAlertsTopic
+
+Resources:
+  # ==========================================================
+  # 1. Amazon S3 - Offline Imports Bucket with Event Notification
+  # ==========================================================
+  OfflineImportBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "marketpulse-offline-imports-${AWS::AccountId}"
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ['*']
+            AllowedMethods: ['GET', 'PUT', 'POST']
+            AllowedOrigins: ['*']
+            MaxAge: 3600
+      NotificationConfiguration:
+        EventBridgeConfiguration:
+          EventBridgeEnabled: true
+
+  # ==========================================================
+  # 2. Amazon SQS - Online Telemetry Buffer Queue (Free Tier)
+  # ==========================================================
+  TelemetryEventQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: marketpulse-telemetry-queue
+      VisibilityTimeout: 60
+      MessageRetentionPeriod: 1209600 # 14 days retention
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt TelemetryDeadLetterQueue.Arn
+        maxReceiveCount: 5
+
+  TelemetryDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: marketpulse-telemetry-dlq
+
+  # ==========================================================
+  # 3. Amazon SNS - Campaign Budget Exhaustion Alert Topic
+  # ==========================================================
+  BudgetAlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: marketpulse-campaign-budget-alerts
+      DisplayName: MarketPulse Budget Alerts
+
+  # ==========================================================
+  # 4. Amazon API Gateway - REST Ingestion API
+  # ==========================================================
+  MarketPulseApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: v1
+      TracingEnabled: true # AWS X-Ray Tracing enabled on API Gateway
+      Cors:
+        AllowMethods: "'POST, GET, OPTIONS'"
+        AllowHeaders: "'Content-Type, X-Amz-Date, Authorization, X-Api-Key, X-Amzn-Trace-Id'"
+        AllowOrigin: "'*'"
+
+  # ==========================================================
+  # 5. AWS Lambda - Stream Processor (SQS -> RDS + Redis + SNS)
+  # ==========================================================
+  StreamProcessorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: aws/lambdas/stream-processor.handler
+      Description: Ingests SQS telemetry batches, updates RDS PostgreSQL and ElastiCache Redis
+      Policies:
+        - SQSPollerPolicy:
+            QueueName: !GetAtt TelemetryEventQueue.QueueName
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt BudgetAlertsTopic.TopicName
+        - AWSXRayDaemonWriteAccess
+      Events:
+        SQSEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt TelemetryEventQueue.Arn
+            BatchSize: 20
+            MaximumBatchingWindowInSeconds: 5
+
+  # ==========================================================
+  # 6. AWS Lambda - Excel Batch Importer (S3 -> RDS)
+  # ==========================================================
+  ExcelImporterFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: aws/lambdas/excel-importer.handler
+      Description: Triggered by S3 upload via EventBridge to parse and bulk-load Excel into RDS
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Sub "marketpulse-offline-imports-${AWS::AccountId}"
+        - AWSXRayDaemonWriteAccess
+      Events:
+        S3UploadEvent:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - aws.s3
+              detail-type:
+                - Object Created
+              detail:
+                bucket:
+                  name:
+                    - !Ref OfflineImportBucket
+
+  # ==========================================================
+  # 7. AWS Lambda - Pre-signed URL Generator for S3 Uploads
+  # ==========================================================
+  PresignedUrlFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: aws/lambdas/presigned-url.handler
+      Description: Issues secure temporary S3 PUT URLs for direct browser spreadsheet uploads
+      Policies:
+        - S3WritePolicy:
+            BucketName: !Sub "marketpulse-offline-imports-${AWS::AccountId}"
+        - AWSXRayDaemonWriteAccess
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MarketPulseApi
+            Path: /imports/presigned-url
+            Method: post
+
+Outputs:
+  ApiEndpoint:
+    Description: Base URL for MarketPulse REST API Gateway
+    Value: !Sub "https://${MarketPulseApi}.execute-api.${AWS::Region}.amazonaws.com/v1"
+  SQSQueueUrl:
+    Description: URL of Amazon SQS Telemetry Queue
+    Value: !Ref TelemetryEventQueue
+  S3BucketName:
+    Description: Name of S3 Bucket for Offline Excel Imports
+    Value: !Ref OfflineImportBucket
+  SNSTopicArn:
+    Description: ARN of SNS Budget Alerts Topic
+    Value: !Ref BudgetAlertsTopic

@@ -11,6 +11,7 @@ import CustomersPage from "./pages/CustomersPage";
 import ChannelsPage from "./pages/ChannelsPage";
 import InteractionsPage from "./pages/InteractionsPage";
 import AnalyticsPage from "./pages/AnalyticsPage";
+import StorefrontPage from "./pages/StorefrontPage";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -24,6 +25,7 @@ const App = () => (
         <Routes>
           <Route element={<AppLayout />}>
             <Route path="/" element={<DashboardPage />} />
+            <Route path="/store" element={<StorefrontPage />} />
             <Route path="/products" element={<ProductsPage />} />
             <Route path="/campaigns" element={<CampaignsPage />} />
             <Route path="/customers" element={<CustomersPage />} />

@@ -1,5 +1,9 @@
-import { DollarSign, Megaphone, Users, MousePointerClick } from 'lucide-react';
+import { useState } from 'react';
+import { DollarSign, Megaphone, Users, MousePointerClick, FileSpreadsheet, ShoppingBag } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { Link } from 'react-router-dom';
+import { Button } from '@/components/ui/button';
+import OfflineImportModal from '@/components/OfflineImportModal';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from 'recharts';
@@ -15,6 +19,7 @@ export default function DashboardPage() {
   const { data: interactions = [] } = useInteractions();
   const { data: campaigns = [] } = useCampaigns();
   const { data: customers = [] } = useCustomers();
+  const [offlineModalOpen, setOfflineModalOpen] = useState(false);
 
   const totalRevenue = interactions.reduce((sum, i) => sum + Number(i.revenue), 0);
 
@@ -38,9 +43,28 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="page-header">Dashboard</h1>
-        <p className="page-subheader">Overview of your marketing performance</p>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="page-header">Dashboard</h1>
+          <p className="page-subheader">Overview of omnichannel marketing & revenue performance</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setOfflineModalOpen(true)}
+            className="gap-2 text-xs"
+          >
+            <FileSpreadsheet className="w-4 h-4 text-emerald-500" />
+            Import Offline Excel
+          </Button>
+          <Link to="/store">
+            <Button size="sm" className="gap-2 text-xs">
+              <ShoppingBag className="w-4 h-4" />
+              Open Live Storefront
+            </Button>
+          </Link>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -86,6 +110,11 @@ export default function DashboardPage() {
         <h3 className="text-sm font-semibold mb-3">Recent Interactions</h3>
         <DataTable data={interactions.slice(0, 8) as any} columns={recentColumns as any} />
       </motion.div>
+
+      <OfflineImportModal
+        isOpen={offlineModalOpen}
+        onClose={() => setOfflineModalOpen(false)}
+      />
     </div>
   );
 }

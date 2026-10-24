@@ -1,16 +1,18 @@
 import { useState } from 'react';
-import { Search, Download } from 'lucide-react';
+import { Search, Download, FileSpreadsheet } from 'lucide-react';
 import { motion } from 'framer-motion';
 import DataTable from '@/components/DataTable';
 import StatusBadge from '@/components/StatusBadge';
 import { useInteractions, type InteractionRow } from '@/hooks/use-interactions';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import OfflineImportModal from '@/components/OfflineImportModal';
 
 export default function InteractionsPage() {
   const { data: interactions = [], isLoading } = useInteractions();
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
+  const [offlineModalOpen, setOfflineModalOpen] = useState(false);
 
   const filtered = interactions.filter(i => {
     const customerName = i.customers?.name ?? '';
@@ -53,9 +55,14 @@ export default function InteractionsPage() {
           <h1 className="page-header">Interactions</h1>
           <p className="page-subheader">{filtered.length} interactions</p>
         </div>
-        <Button variant="outline" size="sm" onClick={exportCSV}>
-          <Download className="w-4 h-4 mr-1" /> Export CSV
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => setOfflineModalOpen(true)}>
+            <FileSpreadsheet className="w-4 h-4 mr-1 text-emerald-500" /> Import Offline Excel
+          </Button>
+          <Button variant="outline" size="sm" onClick={exportCSV}>
+            <Download className="w-4 h-4 mr-1" /> Export CSV
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-3">
@@ -77,6 +84,11 @@ export default function InteractionsPage() {
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
         <DataTable data={filtered as unknown as Record<string, unknown>[]} columns={columns as any} />
       </motion.div>
+
+      <OfflineImportModal
+        isOpen={offlineModalOpen}
+        onClose={() => setOfflineModalOpen(false)}
+      />
     </div>
   );
 }
