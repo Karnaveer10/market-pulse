@@ -52,48 +52,48 @@ export interface Interaction {
 }
 
 export const products: Product[] = [
-  { id: 'p1', name: 'Pro Analytics Suite', category: 'Software', price: 299, status: 'active', createdAt: '2024-01-15' },
-  { id: 'p2', name: 'Marketing Toolkit', category: 'Software', price: 149, status: 'active', createdAt: '2024-02-01' },
-  { id: 'p3', name: 'Cloud Storage Plan', category: 'Service', price: 49, status: 'active', createdAt: '2024-02-20' },
-  { id: 'p4', name: 'Data Connector', category: 'Integration', price: 99, status: 'inactive', createdAt: '2024-03-10' },
-  { id: 'p5', name: 'Enterprise Dashboard', category: 'Software', price: 599, status: 'active', createdAt: '2024-03-25' },
+  { id: 'p1', name: 'Nexus Smart Watch Pro', category: 'Electronics', price: 4999, status: 'active', createdAt: '2024-01-15' },
+  { id: 'p2', name: 'AeroNoise ANC Earbuds', category: 'Audio', price: 2499, status: 'active', createdAt: '2024-02-01' },
+  { id: 'p3', name: 'Kavach Ultra PowerBank 20k', category: 'Accessories', price: 1299, status: 'active', createdAt: '2024-02-20' },
+  { id: 'p4', name: 'GamerX RGB Mechanical Keyboard', category: 'Gaming', price: 3499, status: 'inactive', createdAt: '2024-03-10' },
+  { id: 'p5', name: 'VoltFast 65W GaN Charger', category: 'Accessories', price: 1799, status: 'active', createdAt: '2024-03-25' },
 ];
 
 export const campaigns: Campaign[] = [
-  { id: 'c1', name: 'Spring Launch 2024', startDate: '2024-03-01', endDate: '2024-04-30', budget: 15000, spent: 12400, status: 'active', productId: 'p1' },
-  { id: 'c2', name: 'Social Media Blitz', startDate: '2024-02-15', endDate: '2024-03-15', budget: 8000, spent: 7800, status: 'completed', productId: 'p2' },
-  { id: 'c3', name: 'Email Nurture Series', startDate: '2024-04-01', endDate: '2024-06-30', budget: 5000, spent: 1200, status: 'active', productId: 'p3' },
-  { id: 'c4', name: 'Product Hunt Launch', startDate: '2024-01-10', endDate: '2024-01-20', budget: 3000, spent: 2900, status: 'completed', productId: 'p5' },
-  { id: 'c5', name: 'Retargeting Campaign', startDate: '2024-05-01', endDate: '2024-07-31', budget: 10000, spent: 0, status: 'paused', productId: 'p1' },
+  { id: 'c1', name: 'Diwali Mega Dhamaka Sale', startDate: '2024-10-01', endDate: '2024-11-15', budget: 150000, spent: 124000, status: 'active', productId: 'p1' },
+  { id: 'c2', name: 'Great Indian Festive Blitz', startDate: '2024-09-15', endDate: '2024-10-15', budget: 80000, spent: 78000, status: 'completed', productId: 'p2' },
+  { id: 'c3', name: 'Monsoon Tech Bonanza', startDate: '2024-07-01', endDate: '2024-08-31', budget: 50000, spent: 22000, status: 'active', productId: 'p3' },
+  { id: 'c4', name: 'Independence Day Super Savings', startDate: '2024-08-10', endDate: '2024-08-20', budget: 40000, spent: 39000, status: 'completed', productId: 'p5' },
+  { id: 'c5', name: 'IPL Season Retargeting', startDate: '2024-04-01', endDate: '2024-05-31', budget: 100000, spent: 0, status: 'paused', productId: 'p1' },
 ];
 
 export const customers: Customer[] = [
-  { id: 'cu1', name: 'Sarah Johnson', email: 'sarah@example.com', location: 'New York, US', phones: ['+1-555-0101'], joinedAt: '2024-01-20' },
-  { id: 'cu2', name: 'Marcus Chen', email: 'marcus@example.com', location: 'San Francisco, US', phones: ['+1-555-0102', '+1-555-0103'], joinedAt: '2024-02-14' },
-  { id: 'cu3', name: 'Emma Williams', email: 'emma@example.com', location: 'London, UK', phones: ['+44-555-0201'], joinedAt: '2024-03-01' },
-  { id: 'cu4', name: 'Alex Rivera', email: 'alex@example.com', location: 'Toronto, CA', phones: ['+1-555-0301'], joinedAt: '2024-03-18' },
-  { id: 'cu5', name: 'Yuki Tanaka', email: 'yuki@example.com', location: 'Tokyo, JP', phones: ['+81-555-0401', '+81-555-0402'], joinedAt: '2024-04-05' },
-  { id: 'cu6', name: 'Priya Patel', email: 'priya@example.com', location: 'Mumbai, IN', phones: ['+91-555-0501'], joinedAt: '2024-04-22' },
+  { id: 'cu1', name: 'Aarav Sharma', email: 'aarav.sharma@gmail.com', location: 'Bengaluru, Karnataka', phones: ['+91-98765-43210'], joinedAt: '2024-01-20' },
+  { id: 'cu2', name: 'Ananya Deshmukh', email: 'ananya.deshmukh@yahoo.in', location: 'Mumbai, Maharashtra', phones: ['+91-98230-11223'], joinedAt: '2024-02-14' },
+  { id: 'cu3', name: 'Rohan Verma', email: 'rohan.verma@outlook.com', location: 'Delhi NCR', phones: ['+91-99112-44556'], joinedAt: '2024-03-01' },
+  { id: 'cu4', name: 'Priya Iyer', email: 'priya.iyer@gmail.com', location: 'Chennai, Tamil Nadu', phones: ['+91-94441-77889'], joinedAt: '2024-03-18' },
+  { id: 'cu5', name: 'Kabir Patel', email: 'kabir.patel@gmail.com', location: 'Ahmedabad, Gujarat', phones: ['+91-97250-99887'], joinedAt: '2024-04-05' },
+  { id: 'cu6', name: 'Neha Sundaram', email: 'neha.sundaram@gmail.com', location: 'Hyderabad, Telangana', phones: ['+91-98490-66554'], joinedAt: '2024-04-22' },
 ];
 
 export const channels: Channel[] = [
-  { id: 'ch1', name: 'Instagram Ads', type: 'online', platform: 'Instagram' },
-  { id: 'ch2', name: 'YouTube Ads', type: 'online', platform: 'YouTube' },
-  { id: 'ch3', name: 'Google Search', type: 'online', platform: 'Google' },
-  { id: 'ch4', name: 'Email Newsletter', type: 'online', platform: 'Email' },
-  { id: 'ch5', name: 'NYC Billboard', type: 'offline', platform: 'Times Square' },
-  { id: 'ch6', name: 'Trade Show Booth', type: 'offline', platform: 'CES 2024' },
+  { id: 'ch1', name: 'Instagram Sponsored Ads', type: 'online', platform: 'Instagram' },
+  { id: 'ch2', name: 'YouTube Tech Review Ads', type: 'online', platform: 'YouTube' },
+  { id: 'ch3', name: 'Google Search CPC', type: 'online', platform: 'Google' },
+  { id: 'ch4', name: 'WhatsApp & Email Blast', type: 'online', platform: 'WhatsApp' },
+  { id: 'ch5', name: 'Bengaluru Metro Billboards', type: 'offline', platform: 'Namma Metro' },
+  { id: 'ch6', name: 'Croma & Reliance Digital In-Store', type: 'offline', platform: 'Retail POS' },
 ];
 
 export const interactions: Interaction[] = [
-  { id: 'i1', type: 'purchase', customerId: 'cu1', customerName: 'Sarah Johnson', productId: 'p1', productName: 'Pro Analytics Suite', campaignId: 'c1', campaignName: 'Spring Launch 2024', channelId: 'ch3', channelName: 'Google Search', revenue: 299, date: '2024-03-15' },
-  { id: 'i2', type: 'click', customerId: 'cu2', customerName: 'Marcus Chen', productId: 'p2', productName: 'Marketing Toolkit', campaignId: 'c2', campaignName: 'Social Media Blitz', channelId: 'ch1', channelName: 'Instagram Ads', revenue: 0, date: '2024-03-14' },
-  { id: 'i3', type: 'purchase', customerId: 'cu3', customerName: 'Emma Williams', productId: 'p5', productName: 'Enterprise Dashboard', campaignId: 'c4', campaignName: 'Product Hunt Launch', channelId: 'ch4', channelName: 'Email Newsletter', revenue: 599, date: '2024-03-13' },
-  { id: 'i4', type: 'visit', customerId: 'cu4', customerName: 'Alex Rivera', productId: 'p3', productName: 'Cloud Storage Plan', campaignId: 'c3', campaignName: 'Email Nurture Series', channelId: 'ch4', channelName: 'Email Newsletter', revenue: 0, date: '2024-03-12' },
-  { id: 'i5', type: 'purchase', customerId: 'cu5', customerName: 'Yuki Tanaka', productId: 'p1', productName: 'Pro Analytics Suite', campaignId: 'c1', campaignName: 'Spring Launch 2024', channelId: 'ch2', channelName: 'YouTube Ads', revenue: 299, date: '2024-03-11' },
-  { id: 'i6', type: 'click', customerId: 'cu6', customerName: 'Priya Patel', productId: 'p2', productName: 'Marketing Toolkit', campaignId: 'c2', campaignName: 'Social Media Blitz', channelId: 'ch1', channelName: 'Instagram Ads', revenue: 0, date: '2024-03-10' },
-  { id: 'i7', type: 'purchase', customerId: 'cu2', customerName: 'Marcus Chen', productId: 'p3', productName: 'Cloud Storage Plan', campaignId: 'c3', campaignName: 'Email Nurture Series', channelId: 'ch3', channelName: 'Google Search', revenue: 49, date: '2024-03-09' },
-  { id: 'i8', type: 'visit', customerId: 'cu1', customerName: 'Sarah Johnson', productId: 'p5', productName: 'Enterprise Dashboard', campaignId: 'c1', campaignName: 'Spring Launch 2024', channelId: 'ch5', channelName: 'NYC Billboard', revenue: 0, date: '2024-03-08' },
+  { id: 'i1', type: 'purchase', customerId: 'cu1', customerName: 'Aarav Sharma', productId: 'p1', productName: 'Nexus Smart Watch Pro', campaignId: 'c1', campaignName: 'Diwali Mega Dhamaka Sale', channelId: 'ch3', channelName: 'Google Search CPC', revenue: 4999, date: '2024-03-15' },
+  { id: 'i2', type: 'click', customerId: 'cu2', customerName: 'Ananya Deshmukh', productId: 'p2', productName: 'AeroNoise ANC Earbuds', campaignId: 'c2', campaignName: 'Great Indian Festive Blitz', channelId: 'ch1', channelName: 'Instagram Sponsored Ads', revenue: 0, date: '2024-03-14' },
+  { id: 'i3', type: 'purchase', customerId: 'cu3', customerName: 'Rohan Verma', productId: 'p5', productName: 'VoltFast 65W GaN Charger', campaignId: 'c4', campaignName: 'Independence Day Super Savings', channelId: 'ch4', channelName: 'WhatsApp & Email Blast', revenue: 1799, date: '2024-03-13' },
+  { id: 'i4', type: 'visit', customerId: 'cu4', customerName: 'Priya Iyer', productId: 'p3', productName: 'Kavach Ultra PowerBank 20k', campaignId: 'c3', campaignName: 'Monsoon Tech Bonanza', channelId: 'ch4', channelName: 'WhatsApp & Email Blast', revenue: 0, date: '2024-03-12' },
+  { id: 'i5', type: 'purchase', customerId: 'cu5', customerName: 'Kabir Patel', productId: 'p1', productName: 'Nexus Smart Watch Pro', campaignId: 'c1', campaignName: 'Diwali Mega Dhamaka Sale', channelId: 'ch2', channelName: 'YouTube Tech Review Ads', revenue: 4999, date: '2024-03-11' },
+  { id: 'i6', type: 'click', customerId: 'cu6', customerName: 'Neha Sundaram', productId: 'p2', productName: 'AeroNoise ANC Earbuds', campaignId: 'c2', campaignName: 'Great Indian Festive Blitz', channelId: 'ch1', channelName: 'Instagram Sponsored Ads', revenue: 0, date: '2024-03-10' },
+  { id: 'i7', type: 'purchase', customerId: 'cu2', customerName: 'Ananya Deshmukh', productId: 'p3', productName: 'Kavach Ultra PowerBank 20k', campaignId: 'c3', campaignName: 'Monsoon Tech Bonanza', channelId: 'ch3', channelName: 'Google Search CPC', revenue: 1299, date: '2024-03-09' },
+  { id: 'i8', type: 'visit', customerId: 'cu1', customerName: 'Aarav Sharma', productId: 'p5', productName: 'VoltFast 65W GaN Charger', campaignId: 'c1', campaignName: 'Diwali Mega Dhamaka Sale', channelId: 'ch5', channelName: 'Bengaluru Metro Billboards', revenue: 0, date: '2024-03-08' },
 ];
 
 export const campaignPerformanceData = [

@@ -23,9 +23,12 @@ const App = () => (
       <Sonner />
       <BrowserRouter>
         <Routes>
+          {/* Standalone Realistic Customer Website */}
+          <Route path="/store" element={<StorefrontPage />} />
+
+          {/* Admin Dashboard & Analytics Layout */}
           <Route element={<AppLayout />}>
             <Route path="/" element={<DashboardPage />} />
-            <Route path="/store" element={<StorefrontPage />} />
             <Route path="/products" element={<ProductsPage />} />
             <Route path="/campaigns" element={<CampaignsPage />} />
             <Route path="/customers" element={<CustomersPage />} />

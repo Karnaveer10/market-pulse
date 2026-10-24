@@ -37,37 +37,46 @@ export default function OfflineImportModal({
     const sampleData = [
       {
         Date: new Date().toISOString().split('T')[0],
-        CustomerName: 'TechCorp Solutions',
-        ChannelName: 'Retail Store',
-        CampaignName: 'Spring Launch',
-        ProductName: 'Enterprise Cloud Suite',
+        CustomerName: 'Aarav Sharma',
+        ChannelName: 'Croma & Reliance Digital In-Store',
+        CampaignName: 'Diwali Mega Dhamaka Sale',
+        ProductName: 'Nexus Smart Watch Pro',
         Type: 'purchase',
-        Revenue: 1200,
+        Revenue: 4999,
       },
       {
         Date: new Date().toISOString().split('T')[0],
-        CustomerName: 'Apex Innovations',
-        ChannelName: 'Billboard Ad',
-        CampaignName: 'Social Blitz',
-        ProductName: 'Marketing Pro Hub',
+        CustomerName: 'Ananya Deshmukh',
+        ChannelName: 'Bengaluru Metro Billboards',
+        CampaignName: 'Great Indian Festive Blitz',
+        ProductName: 'AeroNoise ANC Earbuds',
         Type: 'purchase',
-        Revenue: 450,
+        Revenue: 2499,
       },
       {
         Date: new Date().toISOString().split('T')[0],
-        CustomerName: 'Nexis Media',
-        ChannelName: 'Retail Store',
-        CampaignName: 'Email Nurture',
-        ProductName: 'Developer Tools Pack',
+        CustomerName: 'Rohan Verma',
+        ChannelName: 'Croma & Reliance Digital In-Store',
+        CampaignName: 'Monsoon Tech Bonanza',
+        ProductName: 'VoltFast 65W GaN Charger',
         Type: 'purchase',
-        Revenue: 890,
+        Revenue: 1799,
+      },
+      {
+        Date: new Date().toISOString().split('T')[0],
+        CustomerName: 'Priya Iyer',
+        ChannelName: 'Croma & Reliance Digital In-Store',
+        CampaignName: 'Diwali Mega Dhamaka Sale',
+        ProductName: 'Kavach Ultra PowerBank 20k',
+        Type: 'purchase',
+        Revenue: 1299,
       },
     ];
 
     const ws = XLSX.utils.json_to_sheet(sampleData);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Offline POS Transactions');
-    XLSX.writeFile(wb, 'MarketPulse_Offline_Sample.xlsx');
+    XLSX.utils.book_append_sheet(wb, ws, 'Indian Retail Offline POS');
+    XLSX.writeFile(wb, 'MarketPulse_Indian_Offline_Sample.xlsx');
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
