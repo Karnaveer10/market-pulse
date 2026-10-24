@@ -1,15 +1,16 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Upload, FileSpreadsheet, Download, CheckCircle2, AlertCircle, X } from 'lucide-react';
+import { Upload, FileSpreadsheet, Download, CheckCircle2, AlertCircle, X, Building2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Button } from '@/components/ui/button';
 import { supabase } from '@/integrations/supabase/client';
 import { useQueryClient } from '@tanstack/react-query';
+import { useChannels } from '@/hooks/use-channels';
 
 interface ParsedRow {
   date: string;
   customer_name: string;
-  channel_name: string;
+  customer_phone?: string;
   campaign_name: string;
   product_name: string;
   type: string;
@@ -24,6 +25,11 @@ export default function OfflineImportModal({
   onClose: () => void;
 }) {
   const queryClient = useQueryClient();
+  const { data: channels = [] } = useChannels();
+  const offlineChannels = channels.filter(c => c.type === 'offline');
+
+  // Selected Offline Channel First
+  const [selectedChannelId, setSelectedChannelId] = useState<string>('');
   const [file, setFile] = useState<File | null>(null);
   const [parsedRows, setParsedRows] = useState<ParsedRow[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -33,12 +39,20 @@ export default function OfflineImportModal({
 
   if (!isOpen) return null;
 
+  // Resolved active offline channel object
+  const activeOfflineChannel = offlineChannels.find(c => c.id === selectedChannelId) || offlineChannels[0] || {
+    id: 'offline-croma',
+    name: 'Croma & Reliance Digital In-Store',
+    platform: 'Retail Store POS',
+  };
+
   const downloadSampleTemplate = () => {
+    const channelName = activeOfflineChannel.name;
     const sampleData = [
       {
         Date: new Date().toISOString().split('T')[0],
         CustomerName: 'Aarav Sharma',
-        ChannelName: 'Croma & Reliance Digital In-Store',
+        CustomerPhone: '+91 98765 43210',
         CampaignName: 'Diwali Mega Dhamaka Sale',
         ProductName: 'Nexus Smart Watch Pro',
         Type: 'purchase',
@@ -47,7 +61,7 @@ export default function OfflineImportModal({
       {
         Date: new Date().toISOString().split('T')[0],
         CustomerName: 'Ananya Deshmukh',
-        ChannelName: 'Bengaluru Metro Billboards',
+        CustomerPhone: '+91 98230 11223',
         CampaignName: 'Great Indian Festive Blitz',
         ProductName: 'AeroNoise ANC Earbuds',
         Type: 'purchase',
@@ -56,27 +70,37 @@ export default function OfflineImportModal({
       {
         Date: new Date().toISOString().split('T')[0],
         CustomerName: 'Rohan Verma',
-        ChannelName: 'Croma & Reliance Digital In-Store',
+        CustomerPhone: '+91 99112 44556',
         CampaignName: 'Monsoon Tech Bonanza',
-        ProductName: 'VoltFast 65W GaN Charger',
+        ProductName: 'VoltFast GaN 65W Charger',
         Type: 'purchase',
-        Revenue: 1799,
+        Revenue: 1899,
       },
       {
         Date: new Date().toISOString().split('T')[0],
         CustomerName: 'Priya Iyer',
-        ChannelName: 'Croma & Reliance Digital In-Store',
+        CustomerPhone: '+91 94441 77889',
         CampaignName: 'Diwali Mega Dhamaka Sale',
         ProductName: 'Kavach Ultra PowerBank 20k',
         Type: 'purchase',
-        Revenue: 1299,
+        Revenue: 1499,
+      },
+      {
+        Date: new Date().toISOString().split('T')[0],
+        CustomerName: 'Kabir Patel',
+        CustomerPhone: '+91 97250 99887',
+        CampaignName: 'Independence Day Super Savings',
+        ProductName: 'GamerX MechStrike Keyboard',
+        Type: 'purchase',
+        Revenue: 3499,
       },
     ];
 
     const ws = XLSX.utils.json_to_sheet(sampleData);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Indian Retail Offline POS');
-    XLSX.writeFile(wb, 'MarketPulse_Indian_Offline_Sample.xlsx');
+    XLSX.utils.book_append_sheet(wb, ws, `${channelName.slice(0, 25)} Sales`);
+    const cleanFileName = `MarketPulse_${channelName.replace(/[^a-zA-Z0-9]/g, '_')}_Sample.xlsx`;
+    XLSX.writeFile(wb, cleanFileName);
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -103,9 +127,9 @@ export default function OfflineImportModal({
           return {
             date: row.Date || row.date || new Date().toISOString().split('T')[0],
             customer_name: row.CustomerName || row.customer_name || 'Walk-in Retail Customer',
-            channel_name: row.ChannelName || row.channel_name || 'Retail Store',
-            campaign_name: row.CampaignName || row.campaign_name || 'Spring Launch',
-            product_name: row.ProductName || row.product_name || 'Enterprise Cloud Suite',
+            customer_phone: row.CustomerPhone || row.customer_phone || '',
+            campaign_name: row.CampaignName || row.campaign_name || 'Diwali Mega Dhamaka Sale',
+            product_name: row.ProductName || row.product_name || 'Nexus Smart Watch Pro',
             type: (row.Type || row.type || 'purchase').toLowerCase(),
             revenue: rev,
           };
@@ -114,7 +138,7 @@ export default function OfflineImportModal({
         setParsedRows(normalized);
         setTotalRevenue(sumRev);
       } catch (err: any) {
-        setErrorMessage('Failed to parse spreadsheet. Please use the sample template.');
+        setErrorMessage('Failed to parse spreadsheet. Please use the downloaded sample template.');
         setImportStatus('error');
       }
     };
@@ -126,45 +150,47 @@ export default function OfflineImportModal({
     setIsProcessing(true);
 
     try {
-      // 1. Fetch channel, campaign, and product ID fallbacks from supabase
-      const [channelsRes, campaignsRes, productsRes] = await Promise.all([
-        supabase.from('channels').select('id, name'),
+      // 1. Fetch channel, campaign, product, customer IDs from supabase
+      const [campaignsRes, productsRes, customersRes] = await Promise.all([
         supabase.from('campaigns').select('id, name'),
         supabase.from('products').select('id, name'),
+        supabase.from('customers').select('id, name'),
       ]);
 
-      const defaultChannelId = channelsRes.data?.[0]?.id || null;
       const defaultCampaignId = campaignsRes.data?.[0]?.id || null;
       const defaultProductId = productsRes.data?.[0]?.id || null;
+      const defaultCustomerId = customersRes.data?.[0]?.id || null;
 
-      // Map rows for batch insert
+      // Map rows for batch insert assigned to the user-selected offline channel
       const insertPayload = parsedRows.map((r) => {
-        const matchedChannel = channelsRes.data?.find((c) =>
-          c.name.toLowerCase().includes(r.channel_name.toLowerCase())
-        );
         const matchedCampaign = campaignsRes.data?.find((c) =>
           c.name.toLowerCase().includes(r.campaign_name.toLowerCase())
         );
         const matchedProduct = productsRes.data?.find((p) =>
           p.name.toLowerCase().includes(r.product_name.toLowerCase())
         );
+        const matchedCustomer = customersRes.data?.find((cu) =>
+          cu.name.toLowerCase().includes(r.customer_name.toLowerCase())
+        );
 
         return {
           date: r.date,
           type: r.type,
           revenue: r.revenue,
-          channel_id: matchedChannel?.id || defaultChannelId,
+          channel_id: activeOfflineChannel.id.startsWith('offline-') ? null : activeOfflineChannel.id,
           campaign_id: matchedCampaign?.id || defaultCampaignId,
           product_id: matchedProduct?.id || defaultProductId,
+          customer_id: matchedCustomer?.id || defaultCustomerId,
         };
       });
 
       const { error } = await supabase.from('interactions').insert(insertPayload);
       if (error) throw error;
 
-      // Invalidate queries so dashboard & analytics update immediately
+      // Invalidate queries so dashboard, interactions & analytics update immediately
       queryClient.invalidateQueries({ queryKey: ['interactions'] });
       queryClient.invalidateQueries({ queryKey: ['campaigns'] });
+      queryClient.invalidateQueries({ queryKey: ['channels'] });
 
       setImportStatus('success');
       setTimeout(() => {
@@ -198,7 +224,7 @@ export default function OfflineImportModal({
             <div>
               <h2 className="text-base font-semibold">Offline Retail Data Ingestion</h2>
               <p className="text-xs text-muted-foreground">
-                AWS S3 Pre-signed URL + Lambda EventBridge Batch Ingestion
+                AWS S3 Pre-signed URL + EventBridge Lambda Batch Processing
               </p>
             </div>
           </div>
@@ -208,21 +234,49 @@ export default function OfflineImportModal({
         </div>
 
         {/* Content */}
-        <div className="p-6 space-y-6 overflow-y-auto">
-          {/* Download Template Banner */}
-          <div className="flex items-center justify-between p-4 rounded-xl bg-muted/40 border border-border">
+        <div className="p-6 space-y-5 overflow-y-auto">
+          {/* STEP 1: SELECT OFFLINE CHANNEL FIRST */}
+          <div className="space-y-2 p-4 rounded-xl bg-muted/40 border border-border">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Building2 className="w-4 h-4 text-primary" />
+                <label className="text-xs font-bold uppercase tracking-wider text-foreground">
+                  Step 1: Select Target Offline Channel
+                </label>
+              </div>
+              <span className="text-[10px] text-muted-foreground">Only Offline Channels shown</span>
+            </div>
+
+            <select
+              value={selectedChannelId || activeOfflineChannel.id}
+              onChange={(e) => setSelectedChannelId(e.target.value)}
+              className="w-full bg-card border border-border rounded-lg p-2.5 text-xs font-medium text-foreground outline-none focus:border-primary"
+            >
+              {offlineChannels.map((ch) => (
+                <option key={ch.id} value={ch.id}>
+                  {ch.name} ({ch.platform})
+                </option>
+              ))}
+            </select>
+            <p className="text-[11px] text-muted-foreground">
+              All parsed Excel transactions will be attributed to <strong className="text-foreground">{activeOfflineChannel.name}</strong>.
+            </p>
+          </div>
+
+          {/* STEP 2: DOWNLOAD SAMPLE EXCEL FOR SELECTED CHANNEL */}
+          <div className="flex items-center justify-between p-4 rounded-xl bg-muted/20 border border-border">
             <div>
-              <div className="text-xs font-semibold">Need the spreadsheet template?</div>
+              <div className="text-xs font-semibold">Generate Sample Offline Excel</div>
               <div className="text-[11px] text-muted-foreground">
-                Pre-formatted headers for offline in-store purchases and billboard campaign sales
+                Pre-formatted for <strong className="text-foreground">{activeOfflineChannel.name}</strong> with Indian customers & ₹ pricing
               </div>
             </div>
             <Button variant="outline" size="sm" onClick={downloadSampleTemplate} className="gap-2">
-              <Download className="w-4 h-4" /> Download .XLSX
+              <Download className="w-4 h-4 text-emerald-500" /> Download .XLSX
             </Button>
           </div>
 
-          {/* Upload Drop Zone */}
+          {/* STEP 3: UPLOAD FILE */}
           <div className="border-2 border-dashed border-border rounded-2xl p-6 text-center hover:border-primary/50 transition cursor-pointer relative bg-muted/10">
             <input
               type="file"
@@ -232,22 +286,22 @@ export default function OfflineImportModal({
             />
             <Upload className="w-8 h-8 mx-auto mb-2 text-primary animate-bounce" />
             <div className="text-sm font-semibold mb-1">
-              {file ? file.name : 'Drop your Excel (.xlsx / .csv) file here'}
+              {file ? file.name : 'Drop your POS Excel (.xlsx / .csv) file here'}
             </div>
             <div className="text-xs text-muted-foreground">
-              Direct-to-S3 pre-signed upload simulation with automatic Lambda trigger
+              Direct-to-S3 pre-signed upload simulation for {activeOfflineChannel.name}
             </div>
           </div>
 
-          {/* Verification Preview */}
+          {/* VERIFICATION PREVIEW */}
           {parsedRows.length > 0 && (
             <div className="space-y-3">
               <div className="flex items-center justify-between text-xs">
                 <span className="font-semibold text-foreground">
-                  Detected Records: <span className="text-primary font-bold">{parsedRows.length} rows</span>
+                  Detected Records: <span className="text-primary font-bold">{parsedRows.length} transactions</span>
                 </span>
                 <span className="font-semibold text-emerald-500 font-mono">
-                  Total Added Revenue: +${totalRevenue.toLocaleString()}
+                  Total Added Revenue: +₹{totalRevenue.toLocaleString('en-IN')}
                 </span>
               </div>
 
@@ -257,9 +311,9 @@ export default function OfflineImportModal({
                     <tr>
                       <th className="p-2 text-left">Date</th>
                       <th className="p-2 text-left">Customer</th>
-                      <th className="p-2 text-left">Channel</th>
+                      <th className="p-2 text-left">Target Offline Channel</th>
                       <th className="p-2 text-left">Campaign</th>
-                      <th className="p-2 text-right">Revenue</th>
+                      <th className="p-2 text-right">Revenue (₹)</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
@@ -267,10 +321,10 @@ export default function OfflineImportModal({
                       <tr key={i} className="hover:bg-muted/30">
                         <td className="p-2 font-mono">{r.date}</td>
                         <td className="p-2 font-medium">{r.customer_name}</td>
-                        <td className="p-2">{r.channel_name}</td>
+                        <td className="p-2 text-primary font-medium">{activeOfflineChannel.name}</td>
                         <td className="p-2">{r.campaign_name}</td>
                         <td className="p-2 text-right font-mono font-semibold text-emerald-500">
-                          ${r.revenue}
+                          ₹{r.revenue.toLocaleString('en-IN')}
                         </td>
                       </tr>
                     ))}
@@ -279,7 +333,7 @@ export default function OfflineImportModal({
               </div>
               {parsedRows.length > 5 && (
                 <div className="text-[10px] text-muted-foreground text-center">
-                  ...and {parsedRows.length - 5} more records ready for batch ingestion.
+                  ...and {parsedRows.length - 5} more transactions ready for batch ingestion.
                 </div>
               )}
             </div>
@@ -288,7 +342,7 @@ export default function OfflineImportModal({
           {importStatus === 'success' && (
             <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-xs flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4" />
-              Batch ingestion complete! Dashboard metrics and database tables refreshed.
+              Batch ingestion into {activeOfflineChannel.name} complete! Dashboard metrics refreshed.
             </div>
           )}
 
@@ -303,7 +357,7 @@ export default function OfflineImportModal({
         {/* Footer */}
         <div className="px-6 py-4 border-t border-border bg-muted/30 flex items-center justify-between">
           <div className="text-[11px] text-muted-foreground">
-            S3 EventBridge Trigger $\rightarrow$ Lambda Bulk Ingestion
+            Target: <strong>{activeOfflineChannel.name}</strong>
           </div>
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" onClick={onClose}>
@@ -315,7 +369,7 @@ export default function OfflineImportModal({
               onClick={handleBatchCommit}
               className="gap-2"
             >
-              {isProcessing ? 'Streaming to S3 & DB...' : 'Ingest to Database'}
+              {isProcessing ? 'Ingesting to S3 & RDS...' : `Ingest ${parsedRows.length} Rows to ${activeOfflineChannel.name}`}
             </Button>
           </div>
         </div>

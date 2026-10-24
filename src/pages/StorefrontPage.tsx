@@ -5,25 +5,65 @@ import {
   ShoppingBag, CheckCircle2, ArrowRight, Sparkles, Tag, Users,
   MousePointerClick, CreditCard, ChevronRight, Activity, Eye, ShieldCheck,
   Star, Truck, ShieldAlert, Award, Headphones, ArrowLeft, Heart, Search,
-  Menu, X, ExternalLink
+  Menu, X, ExternalLink, Lock, UserCheck, UserPlus, LogOut, Phone, Mail, MapPin
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useProducts, type Product } from '@/hooks/use-products';
 import { useCampaigns } from '@/hooks/use-campaigns';
 import { useChannels } from '@/hooks/use-channels';
+import { useCustomers, type Customer } from '@/hooks/use-customers';
 import { dispatchTelemetryEvent } from '@/lib/telemetry-service';
 import { supabase } from '@/integrations/supabase/client';
 import { useQueryClient } from '@tanstack/react-query';
 import XRayTraceModal from '@/components/XRayTraceModal';
+
+interface CurrentUser {
+  id?: string;
+  name: string;
+  email: string;
+  phone: string;
+  location: string;
+  isGuest?: boolean;
+}
 
 export default function StorefrontPage() {
   const queryClient = useQueryClient();
   const { data: dbProducts = [] } = useProducts();
   const { data: campaigns = [] } = useCampaigns();
   const { data: channels = [] } = useChannels();
+  const { data: customers = [] } = useCustomers();
 
-  // Premium fallback Indian consumer tech catalog if DB is empty/initial
+  // ONLY Online Channels Allowed for the E-Commerce Website
+  const onlineChannels = channels.filter(c => c.type === 'online');
+
+  // Active Login/Session State
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  const [loginModalOpen, setLoginModalOpen] = useState(false);
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [regForm, setRegForm] = useState({
+    name: '',
+    email: '',
+    phone: '',
+    location: 'Bengaluru, Karnataka',
+  });
+
+  // Check localStorage for existing logged-in user on mount
+  useEffect(() => {
+    const saved = localStorage.getItem('voltstore_user');
+    if (saved) {
+      try {
+        setCurrentUser(JSON.parse(saved));
+      } catch (_) {}
+    } else {
+      // Default to opening login/welcome modal on first arrival
+      setLoginModalOpen(true);
+    }
+  }, []);
+
+  // Products catalog
   const defaultProducts: Product[] = [
     {
       id: 'prod-watch-1',
@@ -84,28 +124,21 @@ export default function StorefrontPage() {
   // Cart & Modals
   const [cart, setCart] = useState<{ product: Product; quantity: number }[]>([]);
   const [cartDrawerOpen, setCartDrawerOpen] = useState(false);
-  const [leadModalOpen, setLeadModalOpen] = useState(false);
   const [checkoutModalOpen, setCheckoutModalOpen] = useState(false);
   const [quickViewProduct, setQuickViewProduct] = useState<Product | null>(null);
   const [xrayModalOpen, setXrayModalOpen] = useState(false);
   const [lastActionToast, setLastActionToast] = useState<string>('');
-
-  // Lead capture form state (Indian Persona defaults)
-  const [leadForm, setLeadForm] = useState({
-    name: 'Aarav Sharma',
-    email: 'aarav.sharma@gmail.com',
-    phone: '+91 98765 43210',
-    city: 'Bengaluru, Karnataka',
-  });
 
   const activeCampaign = campaigns.find(c => c.id === selectedCampaignId) || {
     id: 'camp-diwali',
     name: 'Diwali Mega Dhamaka Sale',
   };
 
-  const activeChannel = channels.find(c => c.id === selectedChannelId) || {
+  // Only select from Online Channels
+  const activeChannel = onlineChannels.find(c => c.id === selectedChannelId) || onlineChannels[0] || {
     id: 'chan-insta',
     name: 'Instagram Sponsored Ads',
+    platform: 'Instagram',
   };
 
   const showNotification = (msg: string) => {
@@ -113,7 +146,87 @@ export default function StorefrontPage() {
     setTimeout(() => setLastActionToast(''), 4500);
   };
 
-  // 1. Interaction: Product Visit
+  // Simple Password Verification ("123") & Customer Resolution
+  const handleLoginSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!loginUsername) return;
+
+    // Check simple password rule: "123" or any 123 variant
+    if (loginPassword !== '123' && loginPassword !== '') {
+      showNotification('💡 Hint: Enter password "123" to login as customer');
+      return;
+    }
+
+    // Check if customer already exists in database
+    const matchedCustomer = customers.find(c =>
+      c.name.toLowerCase().includes(loginUsername.toLowerCase()) ||
+      c.email.toLowerCase().includes(loginUsername.toLowerCase())
+    );
+
+    if (matchedCustomer) {
+      const userObj: CurrentUser = {
+        id: matchedCustomer.id,
+        name: matchedCustomer.name,
+        email: matchedCustomer.email,
+        phone: matchedCustomer.phones?.[0] || '+91 98765 43210',
+        location: matchedCustomer.location || 'Bengaluru, Karnataka',
+      };
+      setCurrentUser(userObj);
+      localStorage.setItem('voltstore_user', JSON.stringify(userObj));
+      setLoginModalOpen(false);
+      showNotification(`Welcome back, ${matchedCustomer.name}! Existing Customer session loaded.`);
+    } else {
+      // Not existing customer -> prompt for their info
+      setIsRegistering(true);
+      setRegForm({
+        name: loginUsername,
+        email: `${loginUsername.toLowerCase().replace(/\s+/g, '')}@gmail.com`,
+        phone: '+91 98765 43210',
+        location: 'Bengaluru, Karnataka',
+      });
+    }
+  };
+
+  // Register New Customer info in Supabase
+  const handleRegisterSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!regForm.name || !regForm.email) return;
+
+    let createdId: string | undefined;
+    try {
+      const { data: newCust } = await supabase.from('customers').insert({
+        name: regForm.name,
+        email: regForm.email,
+        phones: [regForm.phone],
+        location: regForm.location,
+      }).select().single();
+
+      createdId = newCust?.id;
+      queryClient.invalidateQueries({ queryKey: ['customers'] });
+    } catch (_) {}
+
+    const userObj: CurrentUser = {
+      id: createdId,
+      name: regForm.name,
+      email: regForm.email,
+      phone: regForm.phone,
+      location: regForm.location,
+    };
+    setCurrentUser(userObj);
+    localStorage.setItem('voltstore_user', JSON.stringify(userObj));
+    setIsRegistering(false);
+    setLoginModalOpen(false);
+    showNotification(`Welcome, ${regForm.name}! New customer registered in database.`);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('voltstore_user');
+    setCurrentUser(null);
+    setLoginModalOpen(true);
+    showNotification('Logged out from VoltStore India');
+  };
+
+  // 1. Interaction: Product Visit (Stores Customer ID in interactions table)
   const handleProductView = async (product: Product) => {
     setQuickViewProduct(product);
 
@@ -121,6 +234,7 @@ export default function StorefrontPage() {
       type: 'visit',
       product_id: product.id,
       product_name: product.name,
+      customer_name: currentUser?.name || 'Aarav Sharma',
       campaign_id: activeCampaign.id,
       campaign_name: activeCampaign.name,
       channel_id: activeChannel.id,
@@ -132,6 +246,7 @@ export default function StorefrontPage() {
         type: 'visit',
         revenue: 0,
         product_id: product.id,
+        customer_id: currentUser?.id || null,
         campaign_id: activeCampaign.id.startsWith('camp-') ? null : activeCampaign.id,
         channel_id: activeChannel.id.startsWith('chan-') ? null : activeChannel.id,
         date: new Date().toISOString().split('T')[0],
@@ -139,24 +254,26 @@ export default function StorefrontPage() {
       queryClient.invalidateQueries({ queryKey: ['interactions'] });
     } catch (_) {}
 
-    showNotification(`⚡ Live Telemetry: "Visit" on ${product.name.slice(0, 25)}... (AWS SQS Enqueued)`);
+    showNotification(`⚡ Telemetry: "Visit" on ${product.name.slice(0, 25)} by ${currentUser?.name || 'Customer'}`);
   };
 
-  // 2. Interaction: Ad / Promo CTA Click
+  // 2. Interaction: Ad Click (Stores Customer ID & CPC cost)
   const handleAdBannerClick = async () => {
     await dispatchTelemetryEvent({
       type: 'click',
+      customer_name: currentUser?.name || 'Aarav Sharma',
       campaign_id: activeCampaign.id,
       campaign_name: activeCampaign.name,
       channel_id: activeChannel.id,
       channel_name: activeChannel.name,
-      cost: 15, // ₹15 CPC for Indian digital ad auction
+      cost: 15, // ₹15 CPC
     });
 
     try {
       await supabase.from('interactions').insert({
         type: 'click',
         revenue: 0,
+        customer_id: currentUser?.id || null,
         campaign_id: activeCampaign.id.startsWith('camp-') ? null : activeCampaign.id,
         channel_id: activeChannel.id.startsWith('chan-') ? null : activeChannel.id,
         date: new Date().toISOString().split('T')[0],
@@ -164,38 +281,10 @@ export default function StorefrontPage() {
       queryClient.invalidateQueries({ queryKey: ['interactions'] });
     } catch (_) {}
 
-    showNotification(`⚡ Telemetry: "Click" registered via ${activeChannel.name} (Consumed ₹15 CPC budget)`);
+    showNotification(`⚡ Telemetry: "Click" registered via ${activeChannel.name} (Budget -₹15)`);
   };
 
-  // 3. Interaction: Lead Capture Signup
-  const handleLeadSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!leadForm.name || !leadForm.email) return;
-
-    try {
-      await supabase.from('customers').insert({
-        name: leadForm.name,
-        email: leadForm.email,
-        phone: leadForm.phone,
-        location: leadForm.city,
-      });
-      queryClient.invalidateQueries({ queryKey: ['customers'] });
-    } catch (_) {}
-
-    await dispatchTelemetryEvent({
-      type: 'lead',
-      customer_name: leadForm.name,
-      customer_email: leadForm.email,
-      customer_phone: leadForm.phone,
-      campaign_id: activeCampaign.id,
-      campaign_name: activeCampaign.name,
-    });
-
-    setLeadModalOpen(false);
-    showNotification(`👤 New Indian Customer Profile Created: ${leadForm.name} (+1 Lead)`);
-  };
-
-  // 4. Interaction: Add to Cart
+  // 3. Interaction: Add to Cart
   const handleAddToCart = async (product: Product, e?: React.MouseEvent) => {
     e?.stopPropagation();
     setCart(prev => {
@@ -211,15 +300,16 @@ export default function StorefrontPage() {
       type: 'cart_add',
       product_id: product.id,
       product_name: product.name,
+      customer_name: currentUser?.name || 'Customer',
       campaign_id: activeCampaign.id,
       channel_id: activeChannel.id,
       revenue: product.price,
     });
 
-    showNotification(`🛒 Cart Funnel: Added "${product.name.slice(0, 22)}..." to cart (₹${product.price})`);
+    showNotification(`🛒 Cart: Added "${product.name.slice(0, 22)}..." (₹${product.price})`);
   };
 
-  // 5. Interaction: Checkout & Purchase
+  // 4. Interaction: Checkout & Purchase (Stores Customer ID, Revenue, Channel, Campaign)
   const handleCompleteCheckout = async () => {
     if (cart.length === 0) return;
     const totalOrderRevenue = cart.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
@@ -230,6 +320,7 @@ export default function StorefrontPage() {
         type: 'purchase',
         revenue: totalOrderRevenue,
         product_id: primaryProduct.id,
+        customer_id: currentUser?.id || null,
         campaign_id: activeCampaign.id.startsWith('camp-') ? null : activeCampaign.id,
         channel_id: activeChannel.id.startsWith('chan-') ? null : activeChannel.id,
         date: new Date().toISOString().split('T')[0],
@@ -242,6 +333,7 @@ export default function StorefrontPage() {
       type: 'purchase',
       product_id: primaryProduct.id,
       product_name: primaryProduct.name,
+      customer_name: currentUser?.name || 'Aarav Sharma',
       campaign_id: activeCampaign.id,
       campaign_name: activeCampaign.name,
       channel_id: activeChannel.id,
@@ -252,7 +344,7 @@ export default function StorefrontPage() {
     setCart([]);
     setCheckoutModalOpen(false);
     setCartDrawerOpen(false);
-    showNotification(`🎉 Order Successful! +₹${totalOrderRevenue.toLocaleString('en-IN')} Revenue Recorded in RDS PostgreSQL!`);
+    showNotification(`🎉 Order Successful for ${currentUser?.name || 'Customer'}! +₹${totalOrderRevenue.toLocaleString('en-IN')} Saved in Interactions Table.`);
   };
 
   const totalCartValue = cart.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
@@ -260,25 +352,37 @@ export default function StorefrontPage() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-emerald-500 selection:text-black">
-      {/* 1. TOP AWS TELEMETRY CONTROLS BAR (For Evaluators) */}
+      {/* 1. TOP AWS TELEMETRY EVALUATOR CONTROLS BAR */}
       <div className="bg-slate-900 border-b border-emerald-500/30 px-4 py-2.5 sticky top-0 z-50 backdrop-blur-md flex flex-wrap items-center justify-between gap-3 text-xs">
         <div className="flex items-center gap-3">
           <Link
             to="/"
             className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition font-medium border border-slate-700"
           >
-            <ArrowLeft className="w-3.5 h-3.5" /> Back to MarketPulse Analytics
+            <ArrowLeft className="w-3.5 h-3.5" /> Back to MarketPulse Admin
           </Link>
 
-          <div className="hidden md:flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-            <span className="font-mono text-emerald-400 font-semibold uppercase tracking-wider text-[11px]">
-              Live Storefront Telemetry
-            </span>
-          </div>
+          {/* Current Customer Badge */}
+          {currentUser ? (
+            <div className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-1 rounded-lg text-emerald-400">
+              <UserCheck className="w-3.5 h-3.5" />
+              <span>Customer: <strong className="text-white">{currentUser.name}</strong></span>
+              <button onClick={handleLogout} className="text-slate-400 hover:text-red-400 ml-1">
+                <LogOut className="w-3 h-3" />
+              </button>
+            </div>
+          ) : (
+            <Button
+              size="sm"
+              onClick={() => setLoginModalOpen(true)}
+              className="h-6 text-[11px] gap-1 bg-emerald-500 text-black hover:bg-emerald-400 font-bold"
+            >
+              <Lock className="w-3 h-3" /> Sign In (PW: 123)
+            </Button>
+          )}
         </div>
 
-        {/* Campaign & Channel Attributor */}
+        {/* Campaign & ONLINE-ONLY Channel Selectors */}
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex items-center gap-1.5 bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-800">
             <Tag className="w-3.5 h-3.5 text-amber-400" />
@@ -286,7 +390,7 @@ export default function StorefrontPage() {
             <select
               value={selectedCampaignId}
               onChange={(e) => setSelectedCampaignId(e.target.value)}
-              className="bg-transparent text-slate-200 outline-none font-semibold cursor-pointer"
+              className="bg-transparent text-slate-200 outline-none font-semibold cursor-pointer max-w-[160px] truncate"
             >
               <option value="" className="bg-slate-900">Diwali Mega Dhamaka Sale</option>
               {campaigns.map((c) => (
@@ -295,16 +399,16 @@ export default function StorefrontPage() {
             </select>
           </div>
 
+          {/* ONLINE CHANNELS ONLY */}
           <div className="flex items-center gap-1.5 bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-800">
             <Users className="w-3.5 h-3.5 text-blue-400" />
-            <span className="text-slate-400">Channel:</span>
+            <span className="text-slate-400">Online Channel:</span>
             <select
-              value={selectedChannelId}
+              value={selectedChannelId || activeChannel.id}
               onChange={(e) => setSelectedChannelId(e.target.value)}
-              className="bg-transparent text-slate-200 outline-none font-semibold cursor-pointer"
+              className="bg-transparent text-slate-200 outline-none font-semibold cursor-pointer max-w-[170px] truncate"
             >
-              <option value="" className="bg-slate-900">Instagram Sponsored Ads</option>
-              {channels.map((c) => (
+              {onlineChannels.map((c) => (
                 <option key={c.id} value={c.id} className="bg-slate-900">{c.name}</option>
               ))}
             </select>
@@ -335,7 +439,7 @@ export default function StorefrontPage() {
               onClick={() => setXrayModalOpen(true)}
               className="underline text-emerald-400 hover:text-emerald-200 font-semibold text-[11px] ml-2"
             >
-              Inspect X-Ray Trace &rarr;
+              X-Ray Trace &rarr;
             </button>
           </motion.div>
         )}
@@ -353,7 +457,7 @@ export default function StorefrontPage() {
                 VoltStore India
               </span>
               <span className="hidden sm:inline-block ml-2 text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                Official Flagship
+                Official Store
               </span>
             </div>
           </div>
@@ -363,21 +467,27 @@ export default function StorefrontPage() {
             <Search className="w-4 h-4 text-slate-500" />
             <input
               type="text"
-              placeholder="Search Smartwatches, ANC Earbuds, Fast Chargers..."
+              placeholder="Search Smartwatches, ANC Earbuds, PowerBanks..."
               className="bg-transparent border-none outline-none w-full text-slate-200 placeholder:text-slate-500"
             />
           </div>
 
-          {/* Actions */}
+          {/* User & Bag Actions */}
           <div className="flex items-center gap-3">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setLeadModalOpen(true)}
-              className="text-xs text-amber-400 hover:text-amber-300 hover:bg-amber-400/10 gap-1.5"
-            >
-              <Tag className="w-4 h-4" /> ₹500 Off Coupon
-            </Button>
+            {currentUser ? (
+              <div className="hidden sm:flex items-center gap-2 text-xs text-slate-300">
+                <span>Namaste, <strong>{currentUser.name.split(' ')[0]}</strong></span>
+              </div>
+            ) : (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setLoginModalOpen(true)}
+                className="text-xs text-slate-300 hover:text-white"
+              >
+                Sign In
+              </Button>
+            )}
 
             <Button
               size="sm"
@@ -396,19 +506,19 @@ export default function StorefrontPage() {
         </div>
       </header>
 
-      {/* 3. HERO FESTIVE BANNER (Simulating Interaction #2: Ad Click) */}
+      {/* 3. HERO FESTIVE BANNER */}
       <section className="relative overflow-hidden bg-gradient-to-b from-slate-900 to-slate-950 py-12 px-4 sm:px-6 lg:px-8 border-b border-slate-800/80">
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_80%_at_50%_-20%,rgba(16,185,129,0.15),rgba(255,255,255,0))]" />
         <div className="max-w-7xl mx-auto relative z-10 grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
           <div className="lg:col-span-7 space-y-4">
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">
-              <Sparkles className="w-3.5 h-3.5" /> {activeCampaign.name} • Extra 20% Off
+              <Sparkles className="w-3.5 h-3.5" /> {activeCampaign.name} • Live Online Offer
             </div>
             <h1 className="text-3xl sm:text-5xl font-black tracking-tight text-white leading-tight">
-              Next-Gen Tech Engineered for India.
+              India's Premier Direct-to-Consumer Audio & Smart Gear.
             </h1>
             <p className="text-sm sm:text-base text-slate-400 max-w-xl">
-              Experience audiophile-grade wireless earbuds, titanium smartwatches, and ultra-durable GaN chargers. Free 2-day delivery across 19,000+ Indian pincodes.
+              Attributed via <strong className="text-emerald-400">{activeChannel.name}</strong>. Purchases and clicks automatically sync to the unified PostgreSQL database and trigger AWS SNS alerts.
             </p>
 
             <div className="flex flex-wrap items-center gap-3 pt-2">
@@ -416,22 +526,24 @@ export default function StorefrontPage() {
                 onClick={handleAdBannerClick}
                 className="bg-emerald-500 hover:bg-emerald-600 text-black font-bold px-6 py-2.5 rounded-xl gap-2 shadow-lg shadow-emerald-500/25"
               >
-                <MousePointerClick className="w-4 h-4" /> Claim Festive Discount (Simulate Ad Click)
+                <MousePointerClick className="w-4 h-4" /> Claim Festive Discount (Simulate Online Ad Click)
               </Button>
-              <Button
-                variant="outline"
-                onClick={() => setLeadModalOpen(true)}
-                className="border-slate-700 hover:bg-slate-800 text-slate-200 rounded-xl"
-              >
-                Register for VIP Early Access
-              </Button>
+              {!currentUser && (
+                <Button
+                  variant="outline"
+                  onClick={() => setLoginModalOpen(true)}
+                  className="border-slate-700 hover:bg-slate-800 text-slate-200 rounded-xl"
+                >
+                  Customer Sign In
+                </Button>
+              )}
             </div>
 
             {/* Trust Badges */}
             <div className="pt-6 grid grid-cols-3 gap-4 border-t border-slate-800 text-slate-400 text-xs">
               <div className="flex items-center gap-2">
                 <Truck className="w-4 h-4 text-emerald-400" />
-                <span>Pan-India Fast Dispatch</span>
+                <span>Pan-India Free Express</span>
               </div>
               <div className="flex items-center gap-2">
                 <ShieldCheck className="w-4 h-4 text-emerald-400" />
@@ -439,7 +551,7 @@ export default function StorefrontPage() {
               </div>
               <div className="flex items-center gap-2">
                 <Award className="w-4 h-4 text-emerald-400" />
-                <span>Top Rated 4.8/5 Stars</span>
+                <span>Top Rated 4.9/5</span>
               </div>
             </div>
           </div>
@@ -480,11 +592,12 @@ export default function StorefrontPage() {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 flex-1 w-full space-y-8">
         <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 border-b border-slate-800 pb-4">
           <div>
-            <h2 className="text-2xl font-bold text-white tracking-tight">Trending Tech Deals</h2>
-            <p className="text-xs text-slate-400">Click any product to fire real-time AWS interaction telemetry</p>
+            <h2 className="text-2xl font-bold text-white tracking-tight">Trending Indian Tech Catalog</h2>
+            <p className="text-xs text-slate-400">Click any product to fire real-time telemetry attributed to {currentUser?.name || 'Customer'}</p>
           </div>
-          <div className="text-xs font-mono text-emerald-400 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-lg">
-            Attributed to: {activeCampaign.name}
+          <div className="text-xs font-mono text-emerald-400 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-lg flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-400" />
+            Channel: {activeChannel.name}
           </div>
         </div>
 
@@ -600,6 +713,10 @@ export default function StorefrontPage() {
                       <span className="font-mono text-white">₹{totalCartValue.toLocaleString('en-IN')}</span>
                     </div>
                     <div className="flex justify-between text-slate-400">
+                      <span>Customer</span>
+                      <span className="font-semibold text-emerald-400">{currentUser?.name || 'Aarav Sharma'}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-400">
                       <span>Delivery Across India</span>
                       <span className="text-emerald-400 font-semibold uppercase text-[10px]">FREE</span>
                     </div>
@@ -622,7 +739,7 @@ export default function StorefrontPage() {
         )}
       </AnimatePresence>
 
-      {/* 6. INDIAN PERSONA CHECKOUT MODAL (Interaction #5) */}
+      {/* 6. INDIAN PERSONA CHECKOUT MODAL */}
       {checkoutModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md p-4">
           <motion.div
@@ -635,34 +752,32 @@ export default function StorefrontPage() {
                 <CreditCard className="w-5 h-5 text-emerald-400" />
                 <h3 className="text-base font-bold text-white">Complete Order (UPI / NetBanking / COD)</h3>
               </div>
-              <button onClick={() => setCheckoutModalOpen(false)} className="text-slate-400 hover:text-white">
-                ✕
-              </button>
+              <button onClick={() => setCheckoutModalOpen(false)} className="text-slate-400 hover:text-white">✕</button>
             </div>
 
-            {/* Indian Customer Address Simulation */}
+            {/* Indian Customer Address from Session */}
             <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1 text-xs">
               <div className="font-semibold text-white flex items-center justify-between">
-                <span>Shipping to: Aarav Sharma</span>
-                <span className="text-emerald-400 text-[10px] font-mono">Default Address</span>
+                <span>Shipping to: {currentUser?.name || 'Aarav Sharma'}</span>
+                <span className="text-emerald-400 text-[10px] font-mono">Verified Customer</span>
               </div>
-              <div className="text-slate-400">#402, 4th Cross, Indiranagar, Bengaluru, Karnataka - 560038</div>
-              <div className="text-slate-400">Contact: +91 98765 43210</div>
+              <div className="text-slate-400">{currentUser?.location || 'Indiranagar, Bengaluru, Karnataka'}</div>
+              <div className="text-slate-400">Contact: {currentUser?.phone || '+91 98765 43210'} • {currentUser?.email || 'aarav@gmail.com'}</div>
             </div>
 
             {/* Attribution Breakdown for Evaluators */}
             <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-800 text-[11px] space-y-1">
               <div className="flex justify-between text-slate-400">
+                <span>Attributed Customer ID:</span>
+                <span className="font-mono text-emerald-400">{currentUser?.id ? `${currentUser.id.slice(0, 18)}...` : 'Linked on commit'}</span>
+              </div>
+              <div className="flex justify-between text-slate-400">
                 <span>Attributed Campaign:</span>
                 <span className="font-semibold text-amber-400">{activeCampaign.name}</span>
               </div>
               <div className="flex justify-between text-slate-400">
-                <span>Attributed Channel:</span>
+                <span>Attributed Online Channel:</span>
                 <span className="font-semibold text-blue-400">{activeChannel.name}</span>
-              </div>
-              <div className="flex justify-between text-slate-400">
-                <span>Target Relational Table:</span>
-                <span className="font-mono text-emerald-400">interactions (RDS PostgreSQL)</span>
               </div>
             </div>
 
@@ -682,7 +797,7 @@ export default function StorefrontPage() {
                   onClick={handleCompleteCheckout}
                   className="bg-emerald-500 hover:bg-emerald-600 text-black font-bold gap-2"
                 >
-                  <ShieldCheck className="w-4 h-4" /> Pay & Fire Telemetry
+                  <ShieldCheck className="w-4 h-4" /> Place Order & Fire Telemetry
                 </Button>
               </div>
             </div>
@@ -690,9 +805,9 @@ export default function StorefrontPage() {
         </div>
       )}
 
-      {/* 7. INDIAN PERSONA LEAD CAPTURE MODAL (Interaction #3) */}
-      {leadModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md p-4">
+      {/* 7. CUSTOMER LOGIN & REGISTRATION MODAL (Password: "123") */}
+      {loginModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
           <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
@@ -700,70 +815,129 @@ export default function StorefrontPage() {
           >
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2">
-                <Tag className="w-5 h-5 text-amber-400" />
-                <h3 className="text-base font-bold text-white">Get ₹500 Festive Coupon</h3>
+                <Lock className="w-5 h-5 text-emerald-400" />
+                <h3 className="text-base font-bold text-white">
+                  {isRegistering ? 'Register as New Customer' : 'Customer Sign In'}
+                </h3>
               </div>
-              <button onClick={() => setLeadModalOpen(false)} className="text-slate-400 hover:text-white">✕</button>
+              <button onClick={() => setLoginModalOpen(false)} className="text-slate-400 hover:text-white">✕</button>
             </div>
-            <p className="text-xs text-slate-400">
-              Submit details to register as a new customer in the central database.
-            </p>
 
-            <form onSubmit={handleLeadSubmit} className="space-y-3">
-              <div>
-                <label className="text-xs font-medium text-slate-300">Full Name</label>
-                <Input
-                  required
-                  placeholder="e.g. Aarav Sharma"
-                  value={leadForm.name}
-                  onChange={(e) => setLeadForm({ ...leadForm, name: e.target.value })}
-                  className="bg-slate-950 border-slate-800 text-white"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-slate-300">Email Address</label>
-                <Input
-                  required
-                  type="email"
-                  placeholder="aarav.sharma@gmail.com"
-                  value={leadForm.email}
-                  onChange={(e) => setLeadForm({ ...leadForm, email: e.target.value })}
-                  className="bg-slate-950 border-slate-800 text-white"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-slate-300">Mobile Number (WhatsApp OTP)</label>
-                <Input
-                  required
-                  placeholder="+91 98765 43210"
-                  value={leadForm.phone}
-                  onChange={(e) => setLeadForm({ ...leadForm, phone: e.target.value })}
-                  className="bg-slate-950 border-slate-800 text-white"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-slate-300">City / State</label>
-                <Input
-                  placeholder="Bengaluru, Karnataka"
-                  value={leadForm.city}
-                  onChange={(e) => setLeadForm({ ...leadForm, city: e.target.value })}
-                  className="bg-slate-950 border-slate-800 text-white"
-                />
-              </div>
-              <div className="pt-2 flex items-center justify-end gap-2">
-                <Button type="button" variant="outline" size="sm" onClick={() => setLeadModalOpen(false)}>
-                  Cancel
-                </Button>
-                <Button type="submit" size="sm" className="bg-emerald-500 hover:bg-emerald-600 text-black font-bold">
-                  Claim ₹500 Coupon
-                </Button>
-              </div>
-            </form>
+            {!isRegistering ? (
+              <form onSubmit={handleLoginSubmit} className="space-y-4">
+                <p className="text-xs text-slate-400">
+                  Enter an existing Indian customer name (e.g. <strong>Aarav Sharma</strong> or <strong>Ananya Deshmukh</strong>) with password <strong>123</strong>. If not found, you can enter new details.
+                </p>
+
+                <div>
+                  <label className="text-xs font-medium text-slate-300">Customer Name / Email</label>
+                  <Input
+                    required
+                    placeholder="e.g. Aarav Sharma"
+                    value={loginUsername}
+                    onChange={(e) => setLoginUsername(e.target.value)}
+                    className="bg-slate-950 border-slate-800 text-white mt-1"
+                  />
+                </div>
+
+                <div>
+                  <div className="flex justify-between items-center">
+                    <label className="text-xs font-medium text-slate-300">Password</label>
+                    <span className="text-[10px] text-emerald-400 font-mono">Use "123"</span>
+                  </div>
+                  <Input
+                    type="password"
+                    placeholder="123"
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                    className="bg-slate-950 border-slate-800 text-white mt-1"
+                  />
+                </div>
+
+                <div className="pt-2 flex items-center justify-between">
+                  <button
+                    type="button"
+                    onClick={() => { setIsRegistering(true); setRegForm({ ...regForm, name: loginUsername }); }}
+                    className="text-xs text-emerald-400 hover:underline flex items-center gap-1"
+                  >
+                    <UserPlus className="w-3.5 h-3.5" /> New customer? Register here
+                  </button>
+
+                  <Button type="submit" size="sm" className="bg-emerald-500 hover:bg-emerald-600 text-black font-bold">
+                    Sign In
+                  </Button>
+                </div>
+              </form>
+            ) : (
+              <form onSubmit={handleRegisterSubmit} className="space-y-3">
+                <p className="text-xs text-slate-400">
+                  Provide customer details to save in the central database and track all interactions.
+                </p>
+
+                <div>
+                  <label className="text-xs font-medium text-slate-300">Full Name</label>
+                  <Input
+                    required
+                    placeholder="e.g. Vikram Malhotra"
+                    value={regForm.name}
+                    onChange={(e) => setRegForm({ ...regForm, name: e.target.value })}
+                    className="bg-slate-950 border-slate-800 text-white mt-1"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-medium text-slate-300">Email Address</label>
+                  <Input
+                    required
+                    type="email"
+                    placeholder="vikram@example.com"
+                    value={regForm.email}
+                    onChange={(e) => setRegForm({ ...regForm, email: e.target.value })}
+                    className="bg-slate-950 border-slate-800 text-white mt-1"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-medium text-slate-300">Phone Number</label>
+                  <Input
+                    required
+                    placeholder="+91 98765 43210"
+                    value={regForm.phone}
+                    onChange={(e) => setRegForm({ ...regForm, phone: e.target.value })}
+                    className="bg-slate-950 border-slate-800 text-white mt-1"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-medium text-slate-300">City / Location</label>
+                  <Input
+                    placeholder="Bengaluru, Karnataka"
+                    value={regForm.location}
+                    onChange={(e) => setRegForm({ ...regForm, location: e.target.value })}
+                    className="bg-slate-950 border-slate-800 text-white mt-1"
+                  />
+                </div>
+
+                <div className="pt-2 flex items-center justify-between">
+                  <button
+                    type="button"
+                    onClick={() => setIsRegistering(false)}
+                    className="text-xs text-slate-400 hover:text-white"
+                  >
+                    &larr; Back to Sign In
+                  </button>
+
+                  <Button type="submit" size="sm" className="bg-emerald-500 hover:bg-emerald-600 text-black font-bold">
+                    Save Profile & Continue
+                  </Button>
+                </div>
+              </form>
+            )}
           </motion.div>
         </div>
       )}
 
-      {/* 8. PRODUCT QUICK VIEW MODAL (Interaction #1: Visit) */}
+      {/* 8. PRODUCT QUICK VIEW MODAL */}
       {quickViewProduct && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md p-4">
           <motion.div
@@ -785,8 +959,8 @@ export default function StorefrontPage() {
               Equipped with high-precision sensors, IP68 water resistance, and fast-charge technology.
             </p>
             <div className="p-3 bg-slate-950 rounded-xl text-[11px] text-slate-400 flex items-center justify-between">
-              <span>Telemetry: Event "visit" recorded</span>
-              <span className="font-mono text-emerald-400">Status 200 OK</span>
+              <span>Customer: {currentUser?.name || 'Aarav Sharma'}</span>
+              <span className="font-mono text-emerald-400">Event "visit" recorded</span>
             </div>
             <div className="flex items-center justify-between pt-2">
               <span className="text-2xl font-black text-emerald-400 font-mono">
