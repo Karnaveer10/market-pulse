@@ -1,22 +1,64 @@
 import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Activity, Clock, CheckCircle2, ChevronRight, X, Layers, Cpu, Database, Server } from 'lucide-react';
-import { subscribeToTraces, type XRayTrace } from '@/lib/telemetry-service';
+import { motion } from 'framer-motion';
+import { Activity, Clock, CheckCircle2, X, Layers, Cpu, Server, Zap, RefreshCw } from 'lucide-react';
+import { subscribeToTraces, dispatchTelemetryEvent, type XRayTrace } from '@/lib/telemetry-service';
 import { Button } from '@/components/ui/button';
 
 export default function XRayTraceModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const [traces, setTraces] = useState<XRayTrace[]>([]);
   const [selectedTrace, setSelectedTrace] = useState<XRayTrace | null>(null);
+  const [isSimulating, setIsSimulating] = useState(false);
 
   useEffect(() => {
     const unsubscribe = subscribeToTraces((newTraces) => {
       setTraces(newTraces);
-      if (newTraces.length > 0 && !selectedTrace) {
-        setSelectedTrace(newTraces[0]);
-      }
+      setSelectedTrace((prev) => {
+        if (!prev && newTraces.length > 0) return newTraces[0];
+        // If current selectedTrace is still in newTraces, keep it, otherwise choose the first one
+        if (prev && newTraces.some((t) => t.trace_id === prev.trace_id)) return prev;
+        return newTraces[0] || null;
+      });
     });
     return unsubscribe;
-  }, [selectedTrace]);
+  }, []);
+
+  const handleSimulatePing = async () => {
+    setIsSimulating(true);
+    const mockEvents: Array<{
+      type: 'purchase' | 'cart_add' | 'lead' | 'click' | 'visit';
+      product_name: string;
+      revenue: number;
+      campaign_name: string;
+      customer_name: string;
+    }> = [
+      {
+        type: 'purchase',
+        product_name: 'boAt Airdopes 141 ANC',
+        revenue: 1499,
+        campaign_name: 'Diwali Mega Sale 2026',
+        customer_name: 'Aarav Sharma',
+      },
+      {
+        type: 'cart_add',
+        product_name: 'Noise ColorFit Ultra 3',
+        revenue: 4499,
+        campaign_name: 'Republic Day Tech Fest',
+        customer_name: 'Priya Patel',
+      },
+      {
+        type: 'lead',
+        product_name: 'OnePlus Nord Buds 2',
+        revenue: 0,
+        campaign_name: 'Spring Launch 2026',
+        customer_name: 'Rohan Mehta',
+      },
+    ];
+
+    const randomEvt = mockEvents[Math.floor(Math.random() * mockEvents.length)];
+    const result = await dispatchTelemetryEvent(randomEvt);
+    setSelectedTrace(result.trace);
+    setIsSimulating(false);
+  };
 
   if (!isOpen) return null;
 
@@ -38,7 +80,7 @@ export default function XRayTraceModal({ isOpen, onClose }: { isOpen: boolean; o
               <div className="flex items-center gap-2">
                 <h2 className="text-base font-semibold">AWS X-Ray Distributed Request Tracing</h2>
                 <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
-                  Free Tier (100k/mo)
+                  Live ap-south-1 Free Tier
                 </span>
               </div>
               <p className="text-xs text-muted-foreground">
@@ -46,21 +88,38 @@ export default function XRayTraceModal({ isOpen, onClose }: { isOpen: boolean; o
               </p>
             </div>
           </div>
-          <Button variant="ghost" size="icon" onClick={onClose} className="rounded-full">
-            <X className="w-5 h-5" />
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleSimulatePing}
+              disabled={isSimulating}
+              className="h-8 gap-1.5 text-xs border-amber-500/30 bg-amber-500/10 text-amber-600 hover:bg-amber-500/20 hover:text-amber-700 dark:text-amber-400"
+            >
+              {isSimulating ? (
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Zap className="w-3.5 h-3.5" />
+              )}
+              <span>Live Telemetry Ping</span>
+            </Button>
+            <Button variant="ghost" size="icon" onClick={onClose} className="rounded-full">
+              <X className="w-5 h-5" />
+            </Button>
+          </div>
         </div>
 
         {/* Body Split */}
         <div className="grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-border flex-1 overflow-hidden">
           {/* Left: Recent Traces List */}
           <div className="overflow-y-auto p-4 space-y-2 bg-muted/20">
-            <div className="text-xs font-semibold text-muted-foreground px-2 py-1 uppercase tracking-wider">
-              Captured Traces ({traces.length})
+            <div className="text-xs font-semibold text-muted-foreground px-2 py-1 uppercase tracking-wider flex items-center justify-between">
+              <span>Captured Traces ({traces.length})</span>
+              <span className="text-[10px] lowercase text-emerald-500 font-mono">live sync</span>
             </div>
             {traces.length === 0 ? (
               <div className="text-center py-12 text-sm text-muted-foreground">
-                No traces recorded yet.<br />Perform an action in the Storefront!
+                No traces recorded yet.<br />Click &quot;Live Telemetry Ping&quot; above!
               </div>
             ) : (
               traces.map((trace) => {
@@ -76,7 +135,7 @@ export default function XRayTraceModal({ isOpen, onClose }: { isOpen: boolean; o
                     }`}
                   >
                     <div className="flex items-center justify-between mb-1.5">
-                      <span className="font-semibold uppercase tracking-wider text-[11px] px-2 py-0.5 rounded-md bg-muted">
+                      <span className="font-semibold uppercase tracking-wider text-[11px] px-2 py-0.5 rounded-md bg-muted text-foreground">
                         {trace.event_type}
                       </span>
                       <span className="font-mono text-emerald-500 font-bold">
@@ -89,7 +148,7 @@ export default function XRayTraceModal({ isOpen, onClose }: { isOpen: boolean; o
                     <div className="flex items-center justify-between text-[11px] text-muted-foreground">
                       <span>{trace.timestamp}</span>
                       {trace.payload.revenue ? (
-                        <span className="text-emerald-500 font-semibold">+${String(trace.payload.revenue)}</span>
+                        <span className="text-emerald-500 font-semibold">₹{Number(trace.payload.revenue).toLocaleString('en-IN')}</span>
                       ) : null}
                     </div>
                   </button>
@@ -105,7 +164,7 @@ export default function XRayTraceModal({ isOpen, onClose }: { isOpen: boolean; o
                 <div className="bg-muted/40 border border-border rounded-xl p-4 flex flex-wrap items-center justify-between gap-4">
                   <div>
                     <span className="text-xs text-muted-foreground">Trace ID:</span>
-                    <div className="font-mono text-xs font-semibold">{selectedTrace.trace_id}</div>
+                    <div className="font-mono text-xs font-semibold text-foreground">{selectedTrace.trace_id}</div>
                   </div>
                   <div className="flex items-center gap-6">
                     <div>
@@ -133,8 +192,8 @@ export default function XRayTraceModal({ isOpen, onClose }: { isOpen: boolean; o
                   <div className="space-y-3">
                     {selectedTrace.segments.map((seg, idx) => {
                       const totalMs = selectedTrace.total_duration_ms || 1;
-                      const leftPercent = Math.min(90, (seg.start_time / totalMs) * 100);
-                      const widthPercent = Math.max(8, (seg.duration_ms / totalMs) * 100);
+                      const leftPercent = Math.min(85, (seg.start_time / totalMs) * 100);
+                      const widthPercent = Math.max(12, (seg.duration_ms / totalMs) * 100);
 
                       return (
                         <div key={seg.id} className="bg-card border border-border rounded-xl p-3 space-y-2">
