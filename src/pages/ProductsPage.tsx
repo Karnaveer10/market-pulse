@@ -46,9 +46,9 @@ export default function ProductsPage() {
   const columns = [
     { key: 'name', header: 'Name', render: (item: Product) => <span className="font-medium">{item.name}</span> },
     { key: 'category', header: 'Category' },
-    { key: 'price', header: 'Price', render: (item: Product) => `$${item.price}` },
+    { key: 'price', header: 'Price', render: (item: Product) => `₹${Number(item.price).toLocaleString('en-IN')}` },
     { key: 'status', header: 'Status', render: (item: Product) => <StatusBadge status={item.status} /> },
-    { key: 'created_at', header: 'Created', render: (item: Product) => new Date(item.created_at).toLocaleDateString() },
+    { key: 'created_at', header: 'Created', render: (item: Product) => new Date(item.created_at).toLocaleDateString('en-IN') },
     { key: 'actions', header: '', render: (item: Product) => (
       <button onClick={(e) => { e.stopPropagation(); handleDelete(item.id); }} className="text-xs text-destructive hover:underline">Delete</button>
     )},
@@ -74,18 +74,20 @@ export default function ProductsPage() {
             <DialogContent>
               <DialogHeader><DialogTitle>Add Product</DialogTitle></DialogHeader>
               <div className="space-y-4 pt-2">
-                <div><Label>Name</Label><Input value={form.name} onChange={e => setForm({...form, name: e.target.value})} placeholder="Product name" /></div>
+                <div><Label>Name</Label><Input value={form.name} onChange={e => setForm({...form, name: e.target.value})} placeholder="e.g. Nexus Smart Watch Pro" /></div>
                 <div><Label>Category</Label>
                   <Select value={form.category} onValueChange={v => setForm({...form, category: v})}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="Software">Software</SelectItem>
-                      <SelectItem value="Service">Service</SelectItem>
-                      <SelectItem value="Integration">Integration</SelectItem>
+                      <SelectItem value="Electronics">Electronics</SelectItem>
+                      <SelectItem value="Audio">Audio</SelectItem>
+                      <SelectItem value="Accessories">Accessories</SelectItem>
+                      <SelectItem value="Gaming">Gaming</SelectItem>
+                      <SelectItem value="Smart Home">Smart Home</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
-                <div><Label>Price ($)</Label><Input type="number" value={form.price} onChange={e => setForm({...form, price: e.target.value})} placeholder="0.00" /></div>
+                <div><Label>Price (₹)</Label><Input type="number" value={form.price} onChange={e => setForm({...form, price: e.target.value})} placeholder="2499" /></div>
                 <Button onClick={handleAdd} className="w-full">Add Product</Button>
               </div>
             </DialogContent>

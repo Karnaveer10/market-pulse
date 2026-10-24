@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
@@ -13,11 +14,17 @@ import InteractionsPage from "./pages/InteractionsPage";
 import AnalyticsPage from "./pages/AnalyticsPage";
 import StorefrontPage from "./pages/StorefrontPage";
 import NotFound from "./pages/NotFound";
+import { seedIndianDataIfEmpty } from "./lib/indian-data-seeder";
 
 const queryClient = new QueryClient();
 
-const App = () => (
-  <QueryClientProvider client={queryClient}>
+const App = () => {
+  useEffect(() => {
+    seedIndianDataIfEmpty();
+  }, []);
+
+  return (
+    <QueryClientProvider client={queryClient}>
     <TooltipProvider>
       <Toaster />
       <Sonner />
@@ -41,6 +48,7 @@ const App = () => (
       </BrowserRouter>
     </TooltipProvider>
   </QueryClientProvider>
-);
+  );
+};
 
 export default App;

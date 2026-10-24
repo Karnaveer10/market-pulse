@@ -24,10 +24,10 @@ export default function DashboardPage() {
   const totalRevenue = interactions.reduce((sum, i) => sum + Number(i.revenue), 0);
 
   const metrics = [
-    { title: 'Total Revenue', value: `$${totalRevenue.toLocaleString()}`, change: 'Live from database', changeType: 'positive' as const, icon: DollarSign },
-    { title: 'Total Campaigns', value: String(campaigns.length), change: 'Live from database', changeType: 'positive' as const, icon: Megaphone },
-    { title: 'Total Customers', value: String(customers.length), change: 'Live from database', changeType: 'positive' as const, icon: Users },
-    { title: 'Total Interactions', value: String(interactions.length), change: 'Live from database', changeType: 'positive' as const, icon: MousePointerClick },
+    { title: 'Total Revenue', value: `₹${totalRevenue.toLocaleString('en-IN')}`, change: 'Live from RDS PostgreSQL', changeType: 'positive' as const, icon: DollarSign },
+    { title: 'Total Campaigns', value: String(campaigns.length), change: 'Live from RDS PostgreSQL', changeType: 'positive' as const, icon: Megaphone },
+    { title: 'Total Customers', value: String(customers.length), change: 'Live from RDS PostgreSQL', changeType: 'positive' as const, icon: Users },
+    { title: 'Total Interactions', value: String(interactions.length), change: 'Live from RDS PostgreSQL', changeType: 'positive' as const, icon: MousePointerClick },
   ];
 
   const recentColumns = [
@@ -37,7 +37,7 @@ export default function DashboardPage() {
     { key: 'product', header: 'Product', render: (item: InteractionRow) => item.products?.name ?? '—' },
     { key: 'channel', header: 'Channel', render: (item: InteractionRow) => item.channels?.name ?? '—' },
     { key: 'revenue', header: 'Revenue', render: (item: InteractionRow) => (
-      <span className="font-medium">{item.revenue > 0 ? `$${item.revenue}` : '—'}</span>
+      <span className="font-medium">{item.revenue > 0 ? `₹${Number(item.revenue).toLocaleString('en-IN')}` : '—'}</span>
     )},
   ];
 
@@ -80,12 +80,12 @@ export default function DashboardPage() {
             <LineChart data={campaignPerformanceData}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis dataKey="month" stroke="hsl(var(--muted-foreground))" fontSize={12} />
-              <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} tickFormatter={(v) => `$${v/1000}k`} />
+              <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} tickFormatter={(v) => `₹${v/1000}k`} />
               <Tooltip contentStyle={{ backgroundColor: 'hsl(var(--card))', border: '1px solid hsl(var(--border))', borderRadius: '8px', fontSize: '12px' }} />
               <Legend />
-              <Line type="monotone" dataKey="Spring Launch" stroke="hsl(var(--chart-1))" strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="Social Blitz" stroke="hsl(var(--chart-2))" strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="Email Nurture" stroke="hsl(var(--chart-3))" strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="Diwali Mega Sale" stroke="hsl(var(--chart-1))" strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="Festive Blitz" stroke="hsl(var(--chart-2))" strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="Monsoon Bonanza" stroke="hsl(var(--chart-3))" strokeWidth={2} dot={false} />
             </LineChart>
           </ResponsiveContainer>
         </motion.div>
@@ -99,7 +99,7 @@ export default function DashboardPage() {
               <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} />
               <Tooltip contentStyle={{ backgroundColor: 'hsl(var(--card))', border: '1px solid hsl(var(--border))', borderRadius: '8px', fontSize: '12px' }} />
               <Legend />
-              <Bar dataKey="revenue" fill="hsl(var(--chart-1))" radius={[4, 4, 0, 0]} name="Revenue ($)" />
+              <Bar dataKey="revenue" fill="hsl(var(--chart-1))" radius={[4, 4, 0, 0]} name="Revenue (₹)" />
               <Bar dataKey="interactions" fill="hsl(var(--chart-2))" radius={[4, 4, 0, 0]} name="Interactions" />
             </BarChart>
           </ResponsiveContainer>

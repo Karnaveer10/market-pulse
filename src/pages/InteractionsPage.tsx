@@ -42,7 +42,7 @@ export default function InteractionsPage() {
     { key: 'campaign', header: 'Campaign', render: (item: InteractionRow) => item.campaigns?.name ?? '—' },
     { key: 'channel', header: 'Channel', render: (item: InteractionRow) => item.channels?.name ?? '—' },
     { key: 'revenue', header: 'Revenue', render: (item: InteractionRow) => (
-      <span className="font-medium">{item.revenue > 0 ? `$${item.revenue}` : '—'}</span>
+      <span className="font-medium">{item.revenue > 0 ? `₹${Number(item.revenue).toLocaleString('en-IN')}` : '—'}</span>
     )},
   ];
 

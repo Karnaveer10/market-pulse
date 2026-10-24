@@ -38,12 +38,12 @@ export default function CampaignsPage() {
   const columns = [
     { key: 'name', header: 'Campaign', render: (item: Campaign) => <span className="font-medium">{item.name}</span> },
     { key: 'status', header: 'Status', render: (item: Campaign) => <StatusBadge status={item.status} /> },
-    { key: 'budget', header: 'Budget', render: (item: Campaign) => `$${Number(item.budget).toLocaleString()}` },
+    { key: 'budget', header: 'Budget', render: (item: Campaign) => `₹${Number(item.budget).toLocaleString('en-IN')}` },
     { key: 'spent', header: 'Spent', render: (item: Campaign) => {
       const pct = item.budget > 0 ? Math.round(Number(item.spent) / Number(item.budget) * 100) : 0;
       return (
         <div className="space-y-1">
-          <span className="text-xs">${Number(item.spent).toLocaleString()} ({pct}%)</span>
+          <span className="text-xs">₹{Number(item.spent).toLocaleString('en-IN')} ({pct}%)</span>
           <Progress value={pct} className="h-1.5" />
         </div>
       );
@@ -59,7 +59,7 @@ export default function CampaignsPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="page-header">Campaigns</h1>
-          <p className="page-subheader">{campaigns.length} campaigns</p>
+          <p className="page-subheader">{campaigns.length} marketing campaigns</p>
         </div>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
@@ -68,12 +68,12 @@ export default function CampaignsPage() {
           <DialogContent>
             <DialogHeader><DialogTitle>Create Campaign</DialogTitle></DialogHeader>
             <div className="space-y-4 pt-2">
-              <div><Label>Name</Label><Input value={form.name} onChange={e => setForm({...form, name: e.target.value})} placeholder="Campaign name" /></div>
+              <div><Label>Name</Label><Input value={form.name} onChange={e => setForm({...form, name: e.target.value})} placeholder="e.g. Diwali Mega Sale" /></div>
               <div className="grid grid-cols-2 gap-3">
                 <div><Label>Start Date</Label><Input type="date" value={form.startDate} onChange={e => setForm({...form, startDate: e.target.value})} /></div>
                 <div><Label>End Date</Label><Input type="date" value={form.endDate} onChange={e => setForm({...form, endDate: e.target.value})} /></div>
               </div>
-              <div><Label>Budget ($)</Label><Input type="number" value={form.budget} onChange={e => setForm({...form, budget: e.target.value})} placeholder="0" /></div>
+              <div><Label>Budget (₹)</Label><Input type="number" value={form.budget} onChange={e => setForm({...form, budget: e.target.value})} placeholder="50000" /></div>
               <div><Label>Product</Label>
                 <Select value={form.productId} onValueChange={v => setForm({...form, productId: v})}>
                   <SelectTrigger><SelectValue placeholder="Select product" /></SelectTrigger>
