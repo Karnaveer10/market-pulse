@@ -79,16 +79,18 @@ All resources are live in AWS Account **`901454175401`** in region **`ap-south-1
 
 | AWS Service | Resource Name / Identifier | Free Tier Limit | Current Live Status |
 | :--- | :--- | :--- | :--- |
-| **IAM** | `developer`, `dev1`, `dev2` | Always Free (Unlimited) | **Active** — AdministratorAccess attached; console logins & CLI keys provisioned. |
-| **S3** | `marketpulse-offline-imports-901454175401` | 5 GB / 20k GET / 2k PUT | **Active** — Encrypted bucket ready for offline POS Excel uploads. |
-| **SQS** | `marketpulse-telemetry-queue`<br>`marketpulse-telemetry-dlq` | 1,000,000 requests/month | **Active** — Main ingestion buffer + Dead Letter Queue configured. |
+| **API Gateway** | `qtpwmwvqr1` (`https://qtpwmwvqr1.execute-api.ap-south-1.amazonaws.com/v1`) | 1,000,000 HTTP calls/month | **Active** — REST API with Cognito User Pool Authorizer & CORS. |
+| **Cognito** | User Pool: `ap-south-1_N55Fn8Nr7`<br>Client: `2sinorgi2hng0c41usc2khcq4t` | 50,000 MAU Always Free | **Active** — Web client auth with secure JWT tokens. |
+| **RDS PostgreSQL** | `marketpulse-live-postgres.cxqauawuurvf.ap-south-1.rds.amazonaws.com` (`db.t4g.micro`) | 750 hrs/mo + 20 GB gp3 | **Active** — Auto-migrated relational schema (products, campaigns, interactions, channels). |
+| **ElastiCache Redis** | `master.marketpulse-live-redis.az1zv6.aps1.cache.amazonaws.com` (`cache.t4g.micro`) | 750 hrs/mo Free Tier | **Active** — High-speed sub-millisecond atomic counters & analytics cache. |
+| **EC2 Demo Host** | `i-057f2783989e1813a` (`http://ec2-3-6-90-242.ap-south-1.compute.amazonaws.com`) | 750 hrs/mo (`t3.micro`) | **Active** — Amazon Linux 2023 with Nginx reverse proxy. |
+| **SQS** | `marketpulse-telemetry-queue`<br>`marketpulse-telemetry-dlq` | 1,000,000 requests/month | **Active** — Main ingestion buffer + Dead Letter Queue with redrive policy (maxReceiveCount: 5). |
 | **SNS** | `marketpulse-campaign-budget-alerts` | 1,000,000 requests/month | **Active** — Topic ARN: `arn:aws:sns:ap-south-1:901454175401:marketpulse-campaign-budget-alerts`. |
-| **Lambda** | `marketpulse-stream-processor` | 1,000,000 executions/month | **Active** — Node.js 20.x, Active X-Ray Tracing enabled, SQS trigger active. |
-| **API Gateway** | `awhhbnom53` (`https://awhhbnom53.execute-api.ap-south-1.amazonaws.com`) | 1,000,000 HTTP calls/month | **Active** — Public REST endpoint routed to Lambda / SQS. |
-| **CloudWatch** | `/aws/lambda/marketpulse-stream-processor` | 5 GB Log ingestion | **Active** — Capturing live invocation metrics and error traces. |
-| **AWS X-Ray** | Tracing on API GW + Lambda | 100k traces recorded/month | **Active** — Service Map & trace segments recording real roundtrip latency. |
-| **Storefront** | VoltStore India (`/store`) | Web Native | **Active** — Indian personas, ₹ pricing, simple login (`123`), customer registration. |
-| **Offline POS** | Reliance Digital Excel Template | Web Native | **Active** — Auto-generated pre-formatted `.xlsx` file available for instant download. |
+| **Lambda** | 9 Microservice Functions (`marketpulse-live-*`) | 1,000,000 executions/month | **Active** — Node.js 20.x, VPC-attached, OpenTelemetry & Active X-Ray Tracing enabled. |
+| **S3** | `marketpulse-offline-imports-901454175401` | 5 GB / 20k GET / 2k PUT | **Active** — Direct presigned URL uploads with CORS & EventBridge notifications. |
+| **CloudWatch** | `/aws/lambda/marketpulse-live-*` | 5 GB Log ingestion | **Active** — Capturing live invocation metrics, structured logs, and error traces. |
+| **AWS X-Ray** | Tracing on API GW + Lambda microservices | 100k traces recorded/month | **Active** — Service Map & trace segments recording real roundtrip latency. |
+| **IAM** | `developer`, `dev1`, `dev2` | Always Free (Unlimited) | **Active** — AdministratorAccess attached; console logins & CLI keys provisioned. |
 
 ---
 

@@ -6,6 +6,13 @@ param(
 $ErrorActionPreference = 'Stop'
 $Region = 'ap-south-1'
 
+if ($Profile -eq 'marketpulse-free') {
+  $availableProfiles = aws configure list-profiles 2>$null
+  if (-not ($availableProfiles -contains 'marketpulse-free')) {
+    $Profile = 'default'
+  }
+}
+
 function Invoke-AwsJson {
   param(
     [Parameter(Mandatory)][string[]]$Arguments,

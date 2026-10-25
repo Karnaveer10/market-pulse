@@ -9,6 +9,14 @@ param(
 $ErrorActionPreference = 'Stop'
 $Region = 'ap-south-1'
 $ExpectedAccount = '901454175401'
+
+if ($Profile -eq 'marketpulse-free') {
+  $availableProfiles = aws configure list-profiles 2>$null
+  if (-not ($availableProfiles -contains 'marketpulse-free')) {
+    $Profile = 'default'
+  }
+}
+
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $RepoRoot
 
@@ -229,7 +237,7 @@ if ($reuseExistingBucket) {
     $corsRules += ($existingCorsJson | ConvertFrom-Json).CORSRules
   }
   $corsRules += [ordered]@{
-    AllowedOrigins = @('http://localhost:8080', 'http://localhost:8081', 'http://localhost:8082', 'http://127.0.0.1:8082', $outputs.CloudFrontUrl)
+    AllowedOrigins = @('http://localhost:8080', 'http://localhost:8081', 'http://localhost:8082', 'http://127.0.0.1:8082', $outputs.Ec2PublicUrl) | Where-Object { $_ }
     AllowedMethods = @('GET', 'PUT', 'POST')
     AllowedHeaders = @('*')
     ExposeHeaders = @('ETag')

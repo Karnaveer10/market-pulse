@@ -27,7 +27,7 @@ async function getPool() {
       max: 2,
       idleTimeoutMillis: 10000,
       connectionTimeoutMillis: 5000,
-      ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: true } : undefined,
+      ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : undefined,
     })).catch((error) => {
       poolPromise = undefined;
       throw error;

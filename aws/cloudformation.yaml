@@ -8,7 +8,7 @@ Globals:
   Function:
     Timeout: 60
     MemorySize: 256
-    Runtime: nodejs24.x
+    Runtime: nodejs20.x
     Tracing: Active
     Layers:
       - !Sub 'arn:aws:lambda:${AWS::Region}:615299751070:layer:AWSOpenTelemetryDistroJs:16'
@@ -16,7 +16,7 @@ Globals:
       Variables:
         IMPORT_BUCKET_NAME: !If [CreateOfflineImportBucket, !Ref OfflineImportBucket, !Ref ExistingImportBucketName]
         SNS_BUDGET_ALERTS_TOPIC_ARN: !If [CreateBudgetAlertsTopic, !Ref BudgetAlertsTopic, !Ref ExistingBudgetAlertsTopicArn]
-        ALLOWED_ORIGINS: !Sub 'http://localhost:8080,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8082,https://${WebDistribution.DomainName}'
+        ALLOWED_ORIGINS: !Sub 'http://localhost:8080,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8082,http://${Ec2DemoInstance.PublicDnsName}'
         AWS_LAMBDA_EXEC_WRAPPER: /opt/otel-instrument
         OTEL_AWS_APPLICATION_SIGNALS_ENABLED: 'false'
         OTEL_NODE_DISABLED_INSTRUMENTATIONS: none
@@ -210,6 +210,7 @@ Resources:
       Name: !Sub '${AWS::StackName}/redis'
       Description: MarketPulse Redis AUTH token
       GenerateSecretString:
+        SecretStringTemplate: '{"username":"default"}'
         GenerateStringKey: password
         PasswordLength: 32
         ExcludePunctuation: true
@@ -222,8 +223,8 @@ Resources:
 
   TelemetryDatabase:
     Type: AWS::RDS::DBInstance
-    DeletionPolicy: Snapshot
-    UpdateReplacePolicy: Snapshot
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
       DBInstanceIdentifier: !Sub '${AWS::StackName}-postgres'
       Engine: postgres
@@ -325,67 +326,6 @@ Resources:
         Rules:
           - ObjectOwnership: BucketOwnerEnforced
 
-  WebOriginAccessControl:
-    Type: AWS::CloudFront::OriginAccessControl
-    Properties:
-      OriginAccessControlConfig:
-        Name: !Sub '${AWS::StackName}-s3-oac'
-        Description: CloudFront access to the private MarketPulse web bucket
-        OriginAccessControlOriginType: s3
-        SigningBehavior: always
-        SigningProtocol: sigv4
-
-  WebDistribution:
-    Type: AWS::CloudFront::Distribution
-    Properties:
-      DistributionConfig:
-        Enabled: true
-        Comment: !Sub '${AWS::StackName} MarketPulse web app'
-        DefaultRootObject: index.html
-        PriceClass: PriceClass_100
-        Origins:
-          - Id: MarketPulseWebBucket
-            DomainName: !GetAtt WebBucket.RegionalDomainName
-            OriginAccessControlId: !GetAtt WebOriginAccessControl.Id
-            S3OriginConfig:
-              OriginAccessIdentity: ''
-        DefaultCacheBehavior:
-          TargetOriginId: MarketPulseWebBucket
-          ViewerProtocolPolicy: redirect-to-https
-          AllowedMethods: [GET, HEAD, OPTIONS]
-          CachedMethods: [GET, HEAD]
-          Compress: true
-          ForwardedValues:
-            QueryString: false
-            Cookies:
-              Forward: none
-        CustomErrorResponses:
-          - ErrorCode: 403
-            ResponseCode: 200
-            ResponsePagePath: /index.html
-            ErrorCachingMinTTL: 0
-          - ErrorCode: 404
-            ResponseCode: 200
-            ResponsePagePath: /index.html
-            ErrorCachingMinTTL: 0
-
-  WebBucketPolicy:
-    Type: AWS::S3::BucketPolicy
-    Properties:
-      Bucket: !Ref WebBucket
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Sid: AllowCloudFrontRead
-            Effect: Allow
-            Principal:
-              Service: cloudfront.amazonaws.com
-            Action: s3:GetObject
-            Resource: !Sub '${WebBucket.Arn}/*'
-            Condition:
-              StringEquals:
-                AWS:SourceArn: !Sub 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${WebDistribution}'
-
   Ec2DemoSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -473,7 +413,7 @@ Resources:
         CorsRules:
           - AllowedHeaders: ['*']
             AllowedMethods: ['GET', 'PUT', 'POST']
-            AllowedOrigins: !Split [',', !Sub 'http://localhost:8080,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8082,https://${WebDistribution.DomainName}']
+            AllowedOrigins: !Split [',', !Sub 'http://localhost:8080,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8082,http://${Ec2DemoInstance.PublicDnsName}']
             MaxAge: 3600
       NotificationConfiguration:
         EventBridgeConfiguration:
@@ -519,7 +459,7 @@ Resources:
       UserPoolName: !Sub '${AWS::StackName}-admins'
       UsernameAttributes: [email]
       AutoVerifiedAttributes: [email]
-      DeletionProtection: ACTIVE
+      DeletionProtection: INACTIVE
       AdminCreateUserConfig:
         AllowAdminCreateUserOnly: true
       Policies:
@@ -582,7 +522,6 @@ Resources:
       Handler: stream-processor.handler
       Description: Ingests SQS telemetry batches, updates RDS PostgreSQL and ElastiCache Redis
       MemorySize: 512
-      ReservedConcurrentExecutions: 2
       VpcConfig:
         SecurityGroupIds: [!GetAtt LambdaSecurityGroup.GroupId]
         SubnetIds: [!Ref PublicSubnetA, !Ref PublicSubnetB]
@@ -626,7 +565,6 @@ Resources:
       Description: Triggered by S3 upload via EventBridge to parse and bulk-load Excel into RDS
       Timeout: 180
       MemorySize: 1024
-      ReservedConcurrentExecutions: 1
       VpcConfig:
         SecurityGroupIds: [!GetAtt LambdaSecurityGroup.GroupId]
         SubnetIds: [!Ref PublicSubnetA, !Ref PublicSubnetB]
@@ -640,7 +578,7 @@ Resources:
           REDIS_ENDPOINT: !GetAtt TelemetryCache.PrimaryEndPoint.Address
           REDIS_PORT: !GetAtt TelemetryCache.PrimaryEndPoint.Port
           REDIS_TLS: 'true'
-          ALLOWED_ORIGINS: !Sub 'http://localhost:8080,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8082,https://${WebDistribution.DomainName}'
+          ALLOWED_ORIGINS: !Sub 'http://localhost:8080,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8082,http://${Ec2DemoInstance.PublicDnsName}'
       Policies:
         - S3ReadPolicy:
             BucketName: !If [CreateOfflineImportBucket, !Ref OfflineImportBucket, !Ref ExistingImportBucketName]
@@ -674,10 +612,9 @@ Resources:
       CodeUri: lambdas/
       Handler: presigned-url.handler
       Description: Issues secure temporary S3 PUT URLs for direct browser spreadsheet uploads
-      ReservedConcurrentExecutions: 1
       Environment:
         Variables:
-          ALLOWED_ORIGINS: !Sub 'http://localhost:8080,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8082,https://${WebDistribution.DomainName}'
+          ALLOWED_ORIGINS: !Sub 'http://localhost:8080,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8082,http://${Ec2DemoInstance.PublicDnsName}'
       Policies:
         - S3WritePolicy:
             BucketName: !If [CreateOfflineImportBucket, !Ref OfflineImportBucket, !Ref ExistingImportBucketName]
@@ -698,7 +635,6 @@ Resources:
       CodeUri: lambdas/
       Handler: customer-api.handler
       Description: Creates or resolves a customer record for the public VoltStore registration flow
-      ReservedConcurrentExecutions: 2
       VpcConfig:
         SecurityGroupIds: [!GetAtt LambdaSecurityGroup.GroupId]
         SubnetIds: [!Ref PublicSubnetA, !Ref PublicSubnetB]
@@ -708,7 +644,7 @@ Resources:
           DB_HOST: !GetAtt TelemetryDatabase.Endpoint.Address
           DB_NAME: marketpulse
           DB_SSL: 'true'
-          ALLOWED_ORIGINS: !Sub 'http://localhost:8080,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8082,https://${WebDistribution.DomainName}'
+          ALLOWED_ORIGINS: !Sub 'http://localhost:8080,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8082,http://${Ec2DemoInstance.PublicDnsName}'
       Policies:
         - Statement:
             - Effect: Allow
@@ -730,11 +666,10 @@ Resources:
       Handler: telemetry-ingress.handler
       Description: Validates telemetry and queues events for asynchronous processing
       Timeout: 15
-      ReservedConcurrentExecutions: 2
       Environment:
         Variables:
           TELEMETRY_QUEUE_URL: !If [CreateTelemetryQueues, !Ref TelemetryEventQueue, !Ref ExistingTelemetryQueueUrl]
-          ALLOWED_ORIGINS: !Sub 'http://localhost:8080,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8082,https://${WebDistribution.DomainName}'
+          ALLOWED_ORIGINS: !Sub 'http://localhost:8080,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8082,http://${Ec2DemoInstance.PublicDnsName}'
       Policies:
         - SQSSendMessagePolicy:
             QueueName: !If [CreateTelemetryQueues, !GetAtt TelemetryEventQueue.QueueName, !Ref ExistingTelemetryQueueName]
@@ -753,7 +688,6 @@ Resources:
       CodeUri: lambdas/
       Handler: analytics.handler
       Description: Serves authenticated aggregates and recent telemetry from PostgreSQL
-      ReservedConcurrentExecutions: 1
       VpcConfig:
         SecurityGroupIds: [!GetAtt LambdaSecurityGroup.GroupId]
         SubnetIds: [!Ref PublicSubnetA, !Ref PublicSubnetB]
@@ -763,7 +697,7 @@ Resources:
           DB_HOST: !GetAtt TelemetryDatabase.Endpoint.Address
           DB_NAME: marketpulse
           DB_SSL: 'true'
-          ALLOWED_ORIGINS: !Sub 'http://localhost:8080,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8082,https://${WebDistribution.DomainName}'
+          ALLOWED_ORIGINS: !Sub 'http://localhost:8080,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8082,http://${Ec2DemoInstance.PublicDnsName}'
       Policies:
         - Statement:
             - Effect: Allow
@@ -786,7 +720,6 @@ Resources:
       CodeUri: lambdas/
       Handler: cache-analytics.handler
       Description: Serves authenticated Redis counters and cache read timing
-      ReservedConcurrentExecutions: 1
       VpcConfig:
         SecurityGroupIds: [!GetAtt LambdaSecurityGroup.GroupId]
         SubnetIds: [!Ref PublicSubnetA, !Ref PublicSubnetB]
@@ -796,7 +729,7 @@ Resources:
           REDIS_ENDPOINT: !GetAtt TelemetryCache.PrimaryEndPoint.Address
           REDIS_PORT: !GetAtt TelemetryCache.PrimaryEndPoint.Port
           REDIS_TLS: 'true'
-          ALLOWED_ORIGINS: !Sub 'http://localhost:8080,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8082,https://${WebDistribution.DomainName}'
+          ALLOWED_ORIGINS: !Sub 'http://localhost:8080,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8082,http://${Ec2DemoInstance.PublicDnsName}'
       Policies:
         - Statement:
             - Effect: Allow
@@ -819,10 +752,9 @@ Resources:
       CodeUri: lambdas/
       Handler: sns-test.handler
       Description: Publishes an authenticated test message to confirmed SNS email subscribers
-      ReservedConcurrentExecutions: 1
       Environment:
         Variables:
-          ALLOWED_ORIGINS: !Sub 'http://localhost:8080,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8082,https://${WebDistribution.DomainName}'
+          ALLOWED_ORIGINS: !Sub 'http://localhost:8080,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8082,http://${Ec2DemoInstance.PublicDnsName}'
       Policies:
         - SNSPublishMessagePolicy:
             TopicName: !If [CreateBudgetAlertsTopic, !GetAtt BudgetAlertsTopic.TopicName, !Ref ExistingBudgetAlertsTopicName]
@@ -844,7 +776,6 @@ Resources:
       Handler: data-api.handler
       Description: Authenticated CRUD access to MarketPulse RDS dimension tables
       MemorySize: 512
-      ReservedConcurrentExecutions: 2
       VpcConfig:
         SecurityGroupIds: [!GetAtt LambdaSecurityGroup.GroupId]
         SubnetIds: [!Ref PublicSubnetA, !Ref PublicSubnetB]
@@ -854,7 +785,7 @@ Resources:
           DB_HOST: !GetAtt TelemetryDatabase.Endpoint.Address
           DB_NAME: marketpulse
           DB_SSL: 'true'
-          ALLOWED_ORIGINS: !Sub 'http://localhost:8080,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8082,https://${WebDistribution.DomainName}'
+          ALLOWED_ORIGINS: !Sub 'http://localhost:8080,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8082,http://${Ec2DemoInstance.PublicDnsName}'
       Policies:
         - Statement:
             - Effect: Allow
@@ -1012,9 +943,6 @@ Outputs:
   WebBucketName:
     Description: Private S3 bucket for CloudFront web assets
     Value: !Ref WebBucket
-  CloudFrontUrl:
-    Description: HTTPS URL for the web application
-    Value: !Sub 'https://${WebDistribution.DomainName}'
   Ec2InstanceId:
     Description: EC2 demo host instance ID (managed through Systems Manager)
     Value: !Ref Ec2DemoInstance

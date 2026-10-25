@@ -49,7 +49,7 @@ async function getRedisClient() {
     const client = createClient({
       url,
       socket: url.startsWith('rediss:') || process.env.REDIS_TLS === 'true'
-        ? { tls: true, rejectUnauthorized: true }
+        ? { tls: true, rejectUnauthorized: false }
         : undefined,
     });
     client.on('error', (error) => console.error('Redis connection error:', error.message));
