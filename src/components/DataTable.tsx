@@ -12,7 +12,7 @@ interface DataTableProps<T> {
   onRowClick?: (item: T) => void;
 }
 
-export default function DataTable<T extends Record<string, any>>({ data, columns, onRowClick }: DataTableProps<T>) {
+export default function DataTable<T extends object>({ data, columns, onRowClick }: DataTableProps<T>) {
   return (
     <div className="overflow-x-auto rounded-xl border border-border bg-card">
       <table className="w-full text-sm">
@@ -37,7 +37,7 @@ export default function DataTable<T extends Record<string, any>>({ data, columns
             >
               {columns.map((col) => (
                 <td key={col.key} className="px-4 py-3">
-                  {col.render ? col.render(item) : String(item[col.key] ?? '')}
+                  {col.render ? col.render(item) : String((item as unknown as Record<string, unknown>)[col.key] ?? '')}
                 </td>
               ))}
             </motion.tr>

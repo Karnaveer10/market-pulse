@@ -5,6 +5,7 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import AppLayout from "./components/AppLayout";
+import AwsAuthGate from "./components/AwsAuthGate";
 import DashboardPage from "./pages/DashboardPage";
 import ProductsPage from "./pages/ProductsPage";
 import CampaignsPage from "./pages/CampaignsPage";
@@ -15,12 +16,14 @@ import AnalyticsPage from "./pages/AnalyticsPage";
 import StorefrontPage from "./pages/StorefrontPage";
 import NotFound from "./pages/NotFound";
 import { seedIndianDataIfEmpty } from "./lib/indian-data-seeder";
+import { isAwsDataApiConfigured } from "@/lib/aws-data-api";
 
 const queryClient = new QueryClient();
 
 const App = () => {
   useEffect(() => {
-    seedIndianDataIfEmpty();
+    // Keep the local Supabase demo seeder out of AWS configured deployments.
+    if (!isAwsDataApiConfigured()) seedIndianDataIfEmpty();
   }, []);
 
   return (
@@ -34,7 +37,7 @@ const App = () => {
           <Route path="/store" element={<StorefrontPage />} />
 
           {/* Admin Dashboard & Analytics Layout */}
-          <Route element={<AppLayout />}>
+          <Route element={<AwsAuthGate><AppLayout /></AwsAuthGate>}>
             <Route path="/" element={<DashboardPage />} />
             <Route path="/products" element={<ProductsPage />} />
             <Route path="/campaigns" element={<CampaignsPage />} />

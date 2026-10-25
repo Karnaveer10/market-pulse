@@ -13,8 +13,9 @@ import { useProducts, type Product } from '@/hooks/use-products';
 import { useCampaigns } from '@/hooks/use-campaigns';
 import { useChannels } from '@/hooks/use-channels';
 import { useCustomers, type Customer } from '@/hooks/use-customers';
-import { dispatchTelemetryEvent } from '@/lib/telemetry-service';
+import { dispatchTelemetryEvent, isAwsTelemetrySyncEnabled } from '@/lib/telemetry-service';
 import { supabase } from '@/integrations/supabase/client';
+import { awsPublicRequest, isAwsApiConfigured } from '@/lib/aws-data-api';
 import { useQueryClient } from '@tanstack/react-query';
 import XRayTraceModal from '@/components/XRayTraceModal';
 
@@ -56,7 +57,9 @@ export default function StorefrontPage() {
     if (saved) {
       try {
         setCurrentUser(JSON.parse(saved));
-      } catch (_) {}
+      } catch {
+        // Ignore malformed local session data and start the storefront signed out.
+      }
     } else {
       // Default to opening login/welcome modal on first arrival
       setLoginModalOpen(true);
@@ -187,23 +190,34 @@ export default function StorefrontPage() {
     }
   };
 
-  // Register New Customer info in Supabase
+  // Persist new customer details in the configured application database.
   const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!regForm.name || !regForm.email) return;
 
     let createdId: string | undefined;
     try {
-      const { data: newCust } = await supabase.from('customers').insert({
-        name: regForm.name,
-        email: regForm.email,
-        phones: [regForm.phone],
-        location: regForm.location,
-      }).select().single();
-
-      createdId = newCust?.id;
+      if (isAwsApiConfigured()) {
+        const customer = await awsPublicRequest<{ id: string }>('/customers', {
+          method: 'POST',
+          body: JSON.stringify(regForm),
+        });
+        createdId = customer.id;
+      } else {
+        const { data, error } = await supabase.from('customers').insert({
+          name: regForm.name,
+          email: regForm.email,
+          phones: [regForm.phone],
+          location: regForm.location,
+        }).select().single();
+        if (error) throw error;
+        createdId = data.id;
+      }
       queryClient.invalidateQueries({ queryKey: ['customers'] });
-    } catch (_) {}
+    } catch (error) {
+      showNotification(error instanceof Error ? error.message : 'Could not register customer.');
+      return;
+    }
 
     const userObj: CurrentUser = {
       id: createdId,
@@ -232,27 +246,33 @@ export default function StorefrontPage() {
 
     await dispatchTelemetryEvent({
       type: 'visit',
+      customer_id: currentUser?.id,
       product_id: product.id,
       product_name: product.name,
       customer_name: currentUser?.name || 'Aarav Sharma',
+      customer_email: currentUser?.email,
       campaign_id: activeCampaign.id,
       campaign_name: activeCampaign.name,
       channel_id: activeChannel.id,
       channel_name: activeChannel.name,
     });
 
-    try {
-      await supabase.from('interactions').insert({
-        type: 'visit',
-        revenue: 0,
-        product_id: product.id,
-        customer_id: currentUser?.id || null,
-        campaign_id: activeCampaign.id.startsWith('camp-') ? null : activeCampaign.id,
-        channel_id: activeChannel.id.startsWith('chan-') ? null : activeChannel.id,
-        date: new Date().toISOString().split('T')[0],
-      });
-      queryClient.invalidateQueries({ queryKey: ['interactions'] });
-    } catch (_) {}
+    if (!isAwsApiConfigured() || !isAwsTelemetrySyncEnabled()) {
+      try {
+        await supabase.from('interactions').insert({
+          type: 'visit',
+          revenue: 0,
+          product_id: product.id,
+          customer_id: currentUser?.id || null,
+          campaign_id: activeCampaign.id.startsWith('camp-') ? null : activeCampaign.id,
+          channel_id: activeChannel.id.startsWith('chan-') ? null : activeChannel.id,
+          date: new Date().toISOString().split('T')[0],
+        });
+        queryClient.invalidateQueries({ queryKey: ['interactions'] });
+      } catch (error) {
+        console.warn('Local interaction save failed:', error);
+      }
+    }
 
     showNotification(`⚡ Telemetry: "Visit" on ${product.name.slice(0, 25)} by ${currentUser?.name || 'Customer'}`);
   };
@@ -261,7 +281,9 @@ export default function StorefrontPage() {
   const handleAdBannerClick = async () => {
     await dispatchTelemetryEvent({
       type: 'click',
+      customer_id: currentUser?.id,
       customer_name: currentUser?.name || 'Aarav Sharma',
+      customer_email: currentUser?.email,
       campaign_id: activeCampaign.id,
       campaign_name: activeCampaign.name,
       channel_id: activeChannel.id,
@@ -269,17 +291,21 @@ export default function StorefrontPage() {
       cost: 15, // ₹15 CPC
     });
 
-    try {
-      await supabase.from('interactions').insert({
-        type: 'click',
-        revenue: 0,
-        customer_id: currentUser?.id || null,
-        campaign_id: activeCampaign.id.startsWith('camp-') ? null : activeCampaign.id,
-        channel_id: activeChannel.id.startsWith('chan-') ? null : activeChannel.id,
-        date: new Date().toISOString().split('T')[0],
-      });
-      queryClient.invalidateQueries({ queryKey: ['interactions'] });
-    } catch (_) {}
+    if (!isAwsApiConfigured() || !isAwsTelemetrySyncEnabled()) {
+      try {
+        await supabase.from('interactions').insert({
+          type: 'click',
+          revenue: 0,
+          customer_id: currentUser?.id || null,
+          campaign_id: activeCampaign.id.startsWith('camp-') ? null : activeCampaign.id,
+          channel_id: activeChannel.id.startsWith('chan-') ? null : activeChannel.id,
+          date: new Date().toISOString().split('T')[0],
+        });
+        queryClient.invalidateQueries({ queryKey: ['interactions'] });
+      } catch (error) {
+        console.warn('Local interaction save failed:', error);
+      }
+    }
 
     showNotification(`⚡ Telemetry: "Click" registered via ${activeChannel.name} (Budget -₹15)`);
   };
@@ -298,9 +324,11 @@ export default function StorefrontPage() {
 
     await dispatchTelemetryEvent({
       type: 'cart_add',
+      customer_id: currentUser?.id,
       product_id: product.id,
       product_name: product.name,
       customer_name: currentUser?.name || 'Customer',
+      customer_email: currentUser?.email,
       campaign_id: activeCampaign.id,
       channel_id: activeChannel.id,
       revenue: product.price,
@@ -315,25 +343,31 @@ export default function StorefrontPage() {
     const totalOrderRevenue = cart.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
     const primaryProduct = cart[0].product;
 
-    try {
-      await supabase.from('interactions').insert({
-        type: 'purchase',
-        revenue: totalOrderRevenue,
-        product_id: primaryProduct.id,
-        customer_id: currentUser?.id || null,
-        campaign_id: activeCampaign.id.startsWith('camp-') ? null : activeCampaign.id,
-        channel_id: activeChannel.id.startsWith('chan-') ? null : activeChannel.id,
-        date: new Date().toISOString().split('T')[0],
-      });
-      queryClient.invalidateQueries({ queryKey: ['interactions'] });
-      queryClient.invalidateQueries({ queryKey: ['campaigns'] });
-    } catch (_) {}
+    if (!isAwsApiConfigured() || !isAwsTelemetrySyncEnabled()) {
+      try {
+        await supabase.from('interactions').insert({
+          type: 'purchase',
+          revenue: totalOrderRevenue,
+          product_id: primaryProduct.id,
+          customer_id: currentUser?.id || null,
+          campaign_id: activeCampaign.id.startsWith('camp-') ? null : activeCampaign.id,
+          channel_id: activeChannel.id.startsWith('chan-') ? null : activeChannel.id,
+          date: new Date().toISOString().split('T')[0],
+        });
+        queryClient.invalidateQueries({ queryKey: ['interactions'] });
+        queryClient.invalidateQueries({ queryKey: ['campaigns'] });
+      } catch (error) {
+        console.warn('Local purchase save failed:', error);
+      }
+    }
 
     await dispatchTelemetryEvent({
       type: 'purchase',
+      customer_id: currentUser?.id,
       product_id: primaryProduct.id,
       product_name: primaryProduct.name,
       customer_name: currentUser?.name || 'Aarav Sharma',
+      customer_email: currentUser?.email,
       campaign_id: activeCampaign.id,
       campaign_name: activeCampaign.name,
       channel_id: activeChannel.id,
