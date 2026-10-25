@@ -1,67 +1,70 @@
-/**
- * AWS Lambda Function: stream-processor
- * 
- * Invoked by Amazon SQS batches containing real-time storefront telemetry events:
- * - Event types: 'visit' | 'click' | 'lead' | 'cart_add' | 'purchase'
- */
+const { SNSClient, PublishCommand } = require('@aws-sdk/client-sns');
+const { updateEventCache } = require('./redis-cache');
+const { persistTelemetryEvent } = require('./event-persistence');
 
-exports.handler = async (event, context) => {
-  console.log(`Received SQS batch with ${event.Records ? event.Records.length : 0} messages`);
+const sns = new SNSClient({});
 
-  const results = [];
+function numberValue(value, field) {
+  const parsed = Number(value ?? 0);
+  if (!Number.isFinite(parsed) || parsed < 0) throw new Error(`${field} must be a non-negative number`);
+  return parsed;
+}
 
+function normalizePayload(record) {
+  let payload;
+  try {
+    payload = JSON.parse(record.body || '{}');
+  } catch {
+    throw new Error('SQS message body must be valid JSON');
+  }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('SQS message body must be a JSON object');
+  const type = String(payload.type || payload.event_type || 'interaction').toLowerCase();
+  if (!['visit', 'click', 'lead', 'cart_add', 'purchase', 'interaction'].includes(type)) throw new Error('Unsupported telemetry event type');
+  const revenue = numberValue(payload.revenue, 'revenue');
+  const cost = numberValue(payload.cost, 'cost');
+  const budget = numberValue(payload.campaign_budget ?? payload.budget, 'campaign_budget');
+  return { payload, type, revenue, cost, budget };
+}
+
+async function processRecord(record) {
+  const { payload, type: inputType, revenue, cost, budget } = normalizePayload(record);
+  const type = inputType === 'interaction' ? 'click' : inputType;
+  const sourceId = String(payload.id || record.messageId || '').slice(0, 128);
+  if (!sourceId) throw new Error('SQS message is missing a message ID');
+  const campaignId = String(payload.campaign_id || payload.campaign_name || 'unassigned').slice(0, 128);
+  const channelId = String(payload.channel_id || payload.channel_name || 'unassigned').slice(0, 128);
+  const eventAt = payload.timestamp ? new Date(payload.timestamp) : new Date();
+  if (Number.isNaN(eventAt.getTime())) throw new Error('Telemetry timestamp is invalid');
+  await persistTelemetryEvent({ sourceId, payload, type, revenue, cost, eventAt });
+
+  const result = await updateEventCache({ sourceId, campaignId, channelId, type, revenue, cost, budget });
+  const shouldAlert = Array.isArray(result) && Number(result[2]) === 1;
+  if (shouldAlert && process.env.SNS_BUDGET_ALERTS_TOPIC_ARN) {
+    const campaignName = String(payload.campaign_name || payload.campaign || campaignId).slice(0, 120);
+    await sns.send(new PublishCommand({
+      TopicArn: process.env.SNS_BUDGET_ALERTS_TOPIC_ARN,
+      Subject: `MarketPulse budget alert: ${campaignName}`.slice(0, 100),
+      Message: JSON.stringify({
+        message: `Campaign ${campaignName} has reached at least 90% of its configured budget.`,
+        campaign_id: campaignId,
+        budget,
+        spent: Number(result[1]),
+        currency: 'INR',
+      }),
+    }));
+  }
+  console.info('Telemetry processed', { sourceId, type, budgetAlertSent: shouldAlert });
+}
+
+exports.handler = async (event) => {
+  const failures = [];
   for (const record of event.Records || []) {
-    const traceHeader = record.attributes?.AWSTraceHeader || context.awsRequestId;
-    console.log(`[X-Ray Trace: ${traceHeader}] Processing message: ${record.messageId}`);
-
     try {
-      let payload;
-      if (typeof record.body === 'string') {
-        try {
-          payload = JSON.parse(record.body);
-        } catch (_) {
-          // If body is plain text or raw string, wrap safely
-          payload = { raw: record.body, type: 'telemetry' };
-        }
-      } else {
-        payload = record.body || {};
-      }
-
-      const {
-        type = 'interaction',
-        revenue = 0,
-        cost = 0,
-        customer = 'Customer',
-        product = 'Nexus Smart Watch Pro',
-        campaign = 'Diwali Mega Dhamaka Sale',
-        channel = 'Instagram Sponsored Ads',
-      } = payload;
-
-      // 1. Relational Database Simulation / Insert (RDS PostgreSQL)
-      console.log(`[Amazon RDS PostgreSQL] INSERT interaction: Type=${type}, Revenue=₹${revenue}, Customer=${customer}, Product=${product}, Campaign=${campaign}, Channel=${channel}`);
-
-      // 2. In-Memory Analytical Cache Update (Redis / ElastiCache)
-      console.log(`[Amazon ElastiCache Redis] HINCRBYFLOAT metrics:total_revenue ₹${revenue} | Atomic in-memory update completed in <2ms`);
-
-      // 3. Amazon SNS Budget Threshold Evaluation
-      if (cost > 0 || revenue > 4000) {
-        console.log(`[Amazon SNS] Budget threshold & high-value order evaluated for campaign "${campaign}". Status: OK.`);
-      }
-
-      results.push({ messageId: record.messageId, status: 'SUCCESS' });
-    } catch (err) {
-      console.error(`Error processing message ${record.messageId}:`, err);
-      // Log error safely without re-throwing to avoid poison message retry storm
-      results.push({ messageId: record.messageId, status: 'ERROR', error: err.message });
+      await processRecord(record);
+    } catch (error) {
+      console.error('Telemetry processing failed', { messageId: record.messageId, error: error.message });
+      failures.push({ itemIdentifier: record.messageId });
     }
   }
-
-  return {
-    statusCode: 200,
-    body: JSON.stringify({
-      message: 'Batch processed successfully',
-      processed: results.length,
-      results,
-    }),
-  };
+  return { batchItemFailures: failures };
 };

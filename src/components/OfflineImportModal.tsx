@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Upload, FileSpreadsheet, Download, CheckCircle2, AlertCircle, X, Building2 } from 'lucide-react';
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
+import Papa from 'papaparse';
 import { Button } from '@/components/ui/button';
 import { supabase } from '@/integrations/supabase/client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useChannels } from '@/hooks/use-channels';
+import { getAwsIdToken } from '@/lib/aws-cognito-auth';
 
 interface ParsedRow {
   date: string;
@@ -15,6 +17,59 @@ interface ParsedRow {
   product_name: string;
   type: string;
   revenue: number;
+}
+
+function normalizeHeader(value: unknown): string {
+  return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function rowValue(row: Record<string, unknown>, candidates: string[]): unknown {
+  const values = new Map(Object.entries(row).map(([key, value]) => [normalizeHeader(key), value]));
+  for (const candidate of candidates) {
+    const value = values.get(normalizeHeader(candidate));
+    if (value !== undefined && value !== null && String(value).trim() !== '') return value;
+  }
+  return undefined;
+}
+
+function excelValue(value: unknown): unknown {
+  if (!value || typeof value !== 'object') return value ?? '';
+  if (value instanceof Date) return value;
+  const cell = value as { result?: unknown; text?: string; richText?: Array<{ text?: string }> };
+  if (Array.isArray(cell.richText)) return cell.richText.map((part) => part.text || '').join('');
+  if (Object.prototype.hasOwnProperty.call(cell, 'result')) return cell.result;
+  if (Object.prototype.hasOwnProperty.call(cell, 'text')) return cell.text;
+  return '';
+}
+
+async function parseUploadedSpreadsheet(file: File): Promise<Record<string, unknown>[]> {
+  if (file.name.toLowerCase().endsWith('.csv')) {
+    const parsed = Papa.parse<Record<string, unknown>>(await file.text(), {
+      header: true,
+      skipEmptyLines: 'greedy',
+      dynamicTyping: true,
+    });
+    if (parsed.errors.length > 0) throw new Error(parsed.errors[0].message);
+    return parsed.data.filter((row) => Object.values(row).some((value) => String(value || '').trim() !== ''));
+  }
+  if (!file.name.toLowerCase().endsWith('.xlsx')) throw new Error('Choose an .xlsx or .csv file');
+
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(await file.arrayBuffer());
+  const worksheet = workbook.worksheets[0];
+  if (!worksheet) throw new Error('Spreadsheet has no worksheet');
+  const headers = worksheet.getRow(1).values.slice(1).map((value) => String(excelValue(value) || '').trim());
+  if (headers.every((header) => !header)) throw new Error('Spreadsheet header row is empty');
+  const rows: Record<string, unknown>[] = [];
+  for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber += 1) {
+    const source = worksheet.getRow(rowNumber);
+    const row: Record<string, unknown> = {};
+    headers.forEach((header, columnIndex) => {
+      if (header) row[header] = excelValue(source.getCell(columnIndex + 1).value);
+    });
+    if (Object.values(row).some((value) => String(value || '').trim() !== '')) rows.push(row);
+  }
+  return rows;
 }
 
 export default function OfflineImportModal({
@@ -36,6 +91,7 @@ export default function OfflineImportModal({
   const [importStatus, setImportStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState('');
   const [totalRevenue, setTotalRevenue] = useState(0);
+  const [awsImportQueued, setAwsImportQueued] = useState(false);
 
   if (!isOpen) return null;
 
@@ -46,7 +102,7 @@ export default function OfflineImportModal({
     platform: 'Retail Store POS',
   };
 
-  const downloadSampleTemplate = () => {
+  const downloadSampleTemplate = async () => {
     const channelName = activeOfflineChannel.name;
     const sampleData = [
       {
@@ -96,60 +152,104 @@ export default function OfflineImportModal({
       },
     ];
 
-    const ws = XLSX.utils.json_to_sheet(sampleData);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, `${channelName.slice(0, 25)} Sales`);
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet(`${channelName.slice(0, 22)} Sales`);
+    worksheet.columns = Object.keys(sampleData[0]).map((key) => ({ header: key, key, width: 24 }));
+    worksheet.addRows(sampleData);
     const cleanFileName = `MarketPulse_${channelName.replace(/[^a-zA-Z0-9]/g, '_')}_Sample.xlsx`;
-    XLSX.writeFile(wb, cleanFileName);
+    const buffer = await workbook.xlsx.writeBuffer();
+    const url = URL.createObjectURL(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = cleanFileName;
+    link.click();
+    URL.revokeObjectURL(url);
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const uploaded = e.target.files?.[0];
     if (!uploaded) return;
 
     setFile(uploaded);
     setImportStatus('idle');
     setErrorMessage('');
-
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-      try {
-        const bstr = evt.target?.result;
-        const wb = XLSX.read(bstr, { type: 'binary' });
-        const wsname = wb.SheetNames[0];
-        const ws = wb.Sheets[wsname];
-        const data = XLSX.utils.sheet_to_json<any>(ws);
-
-        let sumRev = 0;
-        const normalized: ParsedRow[] = data.map((row: any) => {
-          const rev = Number(row.Revenue || row.revenue || 0);
-          sumRev += rev;
-          return {
-            date: row.Date || row.date || new Date().toISOString().split('T')[0],
-            customer_name: row.CustomerName || row.customer_name || 'Walk-in Retail Customer',
-            customer_phone: row.CustomerPhone || row.customer_phone || '',
-            campaign_name: row.CampaignName || row.campaign_name || 'Diwali Mega Dhamaka Sale',
-            product_name: row.ProductName || row.product_name || 'Nexus Smart Watch Pro',
-            type: (row.Type || row.type || 'purchase').toLowerCase(),
-            revenue: rev,
-          };
-        });
-
-        setParsedRows(normalized);
-        setTotalRevenue(sumRev);
-      } catch (err: any) {
-        setErrorMessage('Failed to parse spreadsheet. Please use the downloaded sample template.');
-        setImportStatus('error');
-      }
-    };
-    reader.readAsBinaryString(uploaded);
+    try {
+      if (uploaded.size > 25 * 1024 * 1024) throw new Error('File must be 25 MiB or smaller');
+      const data = await parseUploadedSpreadsheet(uploaded);
+      if (data.length === 0) throw new Error('Spreadsheet contains no transaction rows');
+      let sumRevenue = 0;
+      const normalized: ParsedRow[] = data.map((row) => {
+        const revenue = Number(rowValue(row, ['Revenue', 'Sales', 'Amount']) || 0);
+        if (!Number.isFinite(revenue) || revenue < 0) throw new Error('Spreadsheet contains an invalid revenue amount');
+        sumRevenue += revenue;
+        const eventType = String(rowValue(row, ['Type', 'Event Type']) || 'purchase').toLowerCase();
+        return {
+          date: String(rowValue(row, ['Date', 'Transaction Date', 'Timestamp']) || new Date().toISOString().split('T')[0]),
+          customer_name: String(rowValue(row, ['CustomerName', 'Customer Name', 'Customer Identifier']) || 'Walk-in Retail Customer'),
+          customer_phone: String(rowValue(row, ['CustomerPhone', 'Customer Phone']) || ''),
+          campaign_name: String(rowValue(row, ['CampaignName', 'Campaign Name', 'Campaign Tag']) || 'Diwali Mega Dhamaka Sale'),
+          product_name: String(rowValue(row, ['ProductName', 'Product Name', 'Product SKU']) || 'Nexus Smart Watch Pro'),
+          type: ['visit', 'click', 'lead', 'cart_add', 'purchase'].includes(eventType) ? eventType : 'purchase',
+          revenue,
+        };
+      });
+      setParsedRows(normalized);
+      setTotalRevenue(sumRevenue);
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to parse spreadsheet. Please use the sample template.');
+      setImportStatus('error');
+    }
   };
 
   const handleBatchCommit = async () => {
     if (parsedRows.length === 0) return;
     setIsProcessing(true);
+    setAwsImportQueued(false);
 
     try {
+      const awsApiBase = import.meta.env.VITE_AWS_API_GATEWAY_URL?.replace(/\/+$/, '');
+      if (awsApiBase && file) {
+        const idToken = getAwsIdToken();
+        if (!idToken) throw new Error('Sign in to the AWS admin account before uploading to S3.');
+        const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+        const fileSha256 = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+        const signedUrlResponse = await fetch(`${awsApiBase}/imports/presigned-url`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+          body: JSON.stringify({
+            filename: file.name,
+            sizeBytes: file.size,
+            channelId: activeOfflineChannel.id,
+            fileSha256,
+          }),
+        });
+        if (!signedUrlResponse.ok) {
+          throw new Error(`AWS could not prepare the upload (HTTP ${signedUrlResponse.status})`);
+        }
+        const signedUpload = await signedUrlResponse.json();
+        const uploadResponse = await fetch(signedUpload.uploadUrl, {
+          method: 'PUT',
+          headers: signedUpload.headers,
+          body: file,
+        });
+        if (!uploadResponse.ok) throw new Error(`S3 upload failed (HTTP ${uploadResponse.status})`);
+        setAwsImportQueued(true);
+
+        // EventBridge and the importer persist these rows to AWS asynchronously.
+        // Do not also write the same file into Supabase.
+        queryClient.invalidateQueries({ queryKey: ['interactions'] });
+        queryClient.invalidateQueries({ queryKey: ['campaigns'] });
+        queryClient.invalidateQueries({ queryKey: ['channels'] });
+        setImportStatus('success');
+        setTimeout(() => {
+          onClose();
+          setImportStatus('idle');
+          setFile(null);
+          setParsedRows([]);
+        }, 1500);
+        return;
+      }
+
       // 1. Fetch channel, campaign, product, customer IDs from supabase
       const [campaignsRes, productsRes, customersRes] = await Promise.all([
         supabase.from('campaigns').select('id, name'),
@@ -199,8 +299,8 @@ export default function OfflineImportModal({
         setFile(null);
         setParsedRows([]);
       }, 1500);
-    } catch (err: any) {
-      setErrorMessage(err.message || 'Database insert failed.');
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : 'Database insert failed.');
       setImportStatus('error');
     } finally {
       setIsProcessing(false);
@@ -288,7 +388,7 @@ export default function OfflineImportModal({
           <div className="border-2 border-dashed border-border rounded-2xl p-6 text-center hover:border-primary/50 transition cursor-pointer relative bg-muted/10">
             <input
               type="file"
-              accept=".xlsx,.xls,.csv"
+              accept=".xlsx,.csv"
               onChange={handleFileUpload}
               className="absolute inset-0 opacity-0 cursor-pointer"
             />
@@ -297,7 +397,7 @@ export default function OfflineImportModal({
               {file ? file.name : 'Drop your POS Excel (.xlsx / .csv) file here'}
             </div>
             <div className="text-xs text-muted-foreground">
-              Direct-to-S3 pre-signed upload simulation for {activeOfflineChannel.name}
+              Choose an .xlsx or .csv file for {activeOfflineChannel.name}.
             </div>
           </div>
 
@@ -350,7 +450,9 @@ export default function OfflineImportModal({
           {importStatus === 'success' && (
             <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-xs flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4" />
-              Batch ingestion into {activeOfflineChannel.name} complete! Dashboard metrics refreshed.
+              {awsImportQueued
+                ? `S3 accepted the file for ${activeOfflineChannel.name}; EventBridge will process it in AWS.`
+                : `Rows for ${activeOfflineChannel.name} were saved to the app database. AWS upload is not configured in this run.`}
             </div>
           )}
 
@@ -377,7 +479,7 @@ export default function OfflineImportModal({
               onClick={handleBatchCommit}
               className="gap-2"
             >
-              {isProcessing ? 'Ingesting to S3 & RDS...' : `Ingest ${parsedRows.length} Rows to ${activeOfflineChannel.name}`}
+              {isProcessing ? 'Uploading and saving rows...' : `Ingest ${parsedRows.length} Rows to ${activeOfflineChannel.name}`}
             </Button>
           </div>
         </div>

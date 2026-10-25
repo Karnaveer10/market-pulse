@@ -2,32 +2,478 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >
   MarketPulse - Omnichannel Marketing Intelligence & Real-Time Telemetry Pipeline
-  AWS Free-Tier Certified Infrastructure (S3, API Gateway, SQS, Lambda, SNS, X-Ray, CloudWatch)
+  Cost-conscious proof-of-concept stack. Resource charges and free-plan credit usage depend on the target account.
 
 Globals:
   Function:
-    Timeout: 30
+    Timeout: 60
     MemorySize: 256
-    Runtime: nodejs18.x
-    Tracing: Active # Enables AWS X-Ray distributed tracing on all Lambdas (100k traces/mo FREE)
+    Runtime: nodejs24.x
+    Tracing: Active
+    Layers:
+      - !Sub 'arn:aws:lambda:${AWS::Region}:615299751070:layer:AWSOpenTelemetryDistroJs:16'
     Environment:
       Variables:
-        IMPORT_BUCKET_NAME: !Ref OfflineImportBucket
-        SNS_BUDGET_ALERTS_TOPIC_ARN: !Ref BudgetAlertsTopic
+        IMPORT_BUCKET_NAME: !If [CreateOfflineImportBucket, !Ref OfflineImportBucket, !Ref ExistingImportBucketName]
+        SNS_BUDGET_ALERTS_TOPIC_ARN: !If [CreateBudgetAlertsTopic, !Ref BudgetAlertsTopic, !Ref ExistingBudgetAlertsTopicArn]
+        ALLOWED_ORIGINS: !Sub 'http://localhost:8080,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8082,https://${WebDistribution.DomainName}'
+        AWS_LAMBDA_EXEC_WRAPPER: /opt/otel-instrument
+        OTEL_AWS_APPLICATION_SIGNALS_ENABLED: 'false'
+        OTEL_NODE_DISABLED_INSTRUMENTATIONS: none
+
+Parameters:
+  DatabaseInstanceClass:
+    Type: String
+    Default: db.t4g.micro
+    AllowedValues: [db.t3.micro, db.t4g.micro]
+    Description: Small single-AZ PostgreSQL instance. Usage consumes Free plan credits.
+  CacheNodeType:
+    Type: String
+    Default: cache.t4g.micro
+    AllowedValues: [cache.t4g.micro, cache.t3.micro]
+    Description: Single-node encrypted Redis cache. Usage consumes Free plan credits.
+  AlertEmail:
+    Type: String
+    Default: ''
+    Description: Optional email address for budget alert subscription. No SMS subscription is created.
+  ExistingImportBucketName:
+    Type: String
+    Default: ''
+    Description: Existing import bucket name to reuse; leave empty to create a new bucket.
+  ExistingTelemetryQueueArn:
+    Type: String
+    Default: ''
+    Description: Existing telemetry queue ARN to reuse; leave empty to create a new queue and DLQ.
+  ExistingTelemetryQueueUrl:
+    Type: String
+    Default: ''
+    Description: URL of the existing telemetry queue.
+  ExistingTelemetryQueueName:
+    Type: String
+    Default: ''
+    Description: Name of the existing telemetry queue.
+  ExistingDeadLetterQueueName:
+    Type: String
+    Default: ''
+    Description: Name of the existing dead-letter queue.
+  ExistingBudgetAlertsTopicArn:
+    Type: String
+    Default: ''
+    Description: Existing SNS topic ARN to reuse; leave empty to create a new topic.
+  ExistingBudgetAlertsTopicName:
+    Type: String
+    Default: ''
+    Description: Name of the existing SNS topic.
+
+Conditions:
+  HasAlertEmail: !Not [!Equals [!Ref AlertEmail, '']]
+  CreateOfflineImportBucket: !Equals [!Ref ExistingImportBucketName, '']
+  CreateTelemetryQueues: !Equals [!Ref ExistingTelemetryQueueArn, '']
+  CreateBudgetAlertsTopic: !Equals [!Ref ExistingBudgetAlertsTopicArn, '']
+
+Rules:
+  ExistingTelemetryQueueMetadata:
+    RuleCondition: !Not [!Equals [!Ref ExistingTelemetryQueueArn, '']]
+    Assertions:
+      - Assert: !And
+          - !Not [!Equals [!Ref ExistingTelemetryQueueUrl, '']]
+          - !Not [!Equals [!Ref ExistingTelemetryQueueName, '']]
+          - !Not [!Equals [!Ref ExistingDeadLetterQueueName, '']]
+        AssertDescription: Provide the existing telemetry queue URL/name and dead-letter queue name when reusing the queue.
+  ExistingBudgetAlertsTopicMetadata:
+    RuleCondition: !Not [!Equals [!Ref ExistingBudgetAlertsTopicArn, '']]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref ExistingBudgetAlertsTopicName, '']]
+        AssertDescription: Provide the existing SNS topic name when reusing its ARN.
 
 Resources:
+  # ==========================================================
+  # Shared VPC: database/cache private at the security-group level,
+  # with service endpoints so Lambdas need no NAT gateway.
+  # ==========================================================
+  MarketPulseVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.42.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-vpc'
+
+  MarketPulseInternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  MarketPulseInternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref MarketPulseVpc
+      InternetGatewayId: !Ref MarketPulseInternetGateway
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MarketPulseVpc
+      CidrBlock: 10.42.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MarketPulseVpc
+      CidrBlock: 10.42.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MarketPulseVpc
+
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: MarketPulseInternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref MarketPulseInternetGateway
+
+  PublicSubnetARouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetBRouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRouteTable
+
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: MarketPulse VPC Lambda egress
+      VpcId: !Ref MarketPulseVpc
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 10.42.0.0/16
+
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: PostgreSQL accepts traffic only from MarketPulse Lambdas
+      VpcId: !Ref MarketPulseVpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !GetAtt LambdaSecurityGroup.GroupId
+
+  CacheSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Redis accepts traffic only from MarketPulse Lambdas
+      VpcId: !Ref MarketPulseVpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 6379
+          ToPort: 6379
+          SourceSecurityGroupId: !GetAtt LambdaSecurityGroup.GroupId
+
+  ServiceEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: HTTPS from Lambda ENIs to AWS service endpoints
+      VpcId: !Ref MarketPulseVpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !GetAtt LambdaSecurityGroup.GroupId
+
+  DatabaseSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${AWS::StackName}/database'
+      Description: MarketPulse PostgreSQL credentials
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"marketpulse"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludePunctuation: true
+
+  RedisSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${AWS::StackName}/redis'
+      Description: MarketPulse Redis AUTH token
+      GenerateSecretString:
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludePunctuation: true
+
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: MarketPulse PostgreSQL subnets
+      SubnetIds: [!Ref PublicSubnetA, !Ref PublicSubnetB]
+
+  TelemetryDatabase:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub '${AWS::StackName}-postgres'
+      Engine: postgres
+      DBInstanceClass: !Ref DatabaseInstanceClass
+      AllocatedStorage: 20
+      StorageType: gp3
+      DBName: marketpulse
+      MasterUsername: marketpulse
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${DatabaseSecret}:SecretString:password}}'
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      VPCSecurityGroups: [!GetAtt DatabaseSecurityGroup.GroupId]
+      PubliclyAccessible: false
+      MultiAZ: false
+      BackupRetentionPeriod: 0
+      StorageEncrypted: true
+      EnableIAMDatabaseAuthentication: false
+      AutoMinorVersionUpgrade: true
+
+  RedisSubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    Properties:
+      Description: MarketPulse Redis subnets
+      SubnetIds: [!Ref PublicSubnetA, !Ref PublicSubnetB]
+
+  TelemetryCache:
+    Type: AWS::ElastiCache::ReplicationGroup
+    Properties:
+      ReplicationGroupId: !Sub '${AWS::StackName}-redis'
+      ReplicationGroupDescription: MarketPulse telemetry counters
+      Engine: redis
+      CacheNodeType: !Ref CacheNodeType
+      CacheSubnetGroupName: !Ref RedisSubnetGroup
+      SecurityGroupIds: [!GetAtt CacheSecurityGroup.GroupId]
+      NumCacheClusters: 1
+      AutomaticFailoverEnabled: false
+      MultiAZEnabled: false
+      TransitEncryptionEnabled: true
+      AtRestEncryptionEnabled: true
+      AuthToken: !Sub '{{resolve:secretsmanager:${RedisSecret}:SecretString:password}}'
+      SnapshotRetentionLimit: 0
+
+  SecretsManagerEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref MarketPulseVpc
+      VpcEndpointType: Interface
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.secretsmanager'
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref PublicSubnetA, !Ref PublicSubnetB]
+      SecurityGroupIds: [!GetAtt ServiceEndpointSecurityGroup.GroupId]
+
+  SnsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref MarketPulseVpc
+      VpcEndpointType: Interface
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.sns'
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref PublicSubnetA, !Ref PublicSubnetB]
+      SecurityGroupIds: [!GetAtt ServiceEndpointSecurityGroup.GroupId]
+
+  XRayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref MarketPulseVpc
+      VpcEndpointType: Interface
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.xray'
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref PublicSubnetA, !Ref PublicSubnetB]
+      SecurityGroupIds: [!GetAtt ServiceEndpointSecurityGroup.GroupId]
+
+  LogsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref MarketPulseVpc
+      VpcEndpointType: Interface
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.logs'
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref PublicSubnetA, !Ref PublicSubnetB]
+      SecurityGroupIds: [!GetAtt ServiceEndpointSecurityGroup.GroupId]
+
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref MarketPulseVpc
+      VpcEndpointType: Gateway
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      RouteTableIds: [!Ref PublicRouteTable]
+
+  WebBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+
+  WebOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${AWS::StackName}-s3-oac'
+        Description: CloudFront access to the private MarketPulse web bucket
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  WebDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub '${AWS::StackName} MarketPulse web app'
+        DefaultRootObject: index.html
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: MarketPulseWebBucket
+            DomainName: !GetAtt WebBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt WebOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        DefaultCacheBehavior:
+          TargetOriginId: MarketPulseWebBucket
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+
+  WebBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontRead
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${WebBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${WebDistribution}'
+
+  Ec2DemoSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Public HTTP for the optional EC2 demo host; SSH is not open
+      VpcId: !Ref MarketPulseVpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  Ec2DemoRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: ReadMarketPulseWebAssets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt WebBucket.Arn
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub '${WebBucket.Arn}/*'
+
+  Ec2DemoInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref Ec2DemoRole]
+
+  Ec2DemoInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Sub '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}'
+      InstanceType: t3.micro
+      IamInstanceProfile: !Ref Ec2DemoInstanceProfile
+      SubnetId: !Ref PublicSubnetA
+      SecurityGroupIds: [!GetAtt Ec2DemoSecurityGroup.GroupId]
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail
+          dnf install -y nginx
+          printf '%s\n' '<!doctype html><title>MarketPulse EC2</title><h1>MarketPulse EC2 host is ready</h1><p>Deploy the built web assets to the S3 web bucket and use SSM to sync them here.</p>' > /usr/share/nginx/html/index.html
+          systemctl enable --now nginx
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-marketpulse-ec2'
+
   # ==========================================================
   # 1. Amazon S3 - Offline Imports Bucket with Event Notification
   # ==========================================================
   OfflineImportBucket:
     Type: AWS::S3::Bucket
+    Condition: CreateOfflineImportBucket
     Properties:
-      BucketName: !Sub "marketpulse-offline-imports-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-import-files
+            Status: Enabled
+            Prefix: raw/
+            ExpirationInDays: 30
       CorsConfiguration:
         CorsRules:
           - AllowedHeaders: ['*']
             AllowedMethods: ['GET', 'PUT', 'POST']
-            AllowedOrigins: ['*']
+            AllowedOrigins: !Split [',', !Sub 'http://localhost:8080,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8082,https://${WebDistribution.DomainName}']
             MaxAge: 3600
       NotificationConfiguration:
         EventBridgeConfiguration:
@@ -38,9 +484,9 @@ Resources:
   # ==========================================================
   TelemetryEventQueue:
     Type: AWS::SQS::Queue
+    Condition: CreateTelemetryQueues
     Properties:
-      QueueName: marketpulse-telemetry-queue
-      VisibilityTimeout: 60
+      VisibilityTimeout: 360
       MessageRetentionPeriod: 1209600 # 14 days retention
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt TelemetryDeadLetterQueue.Arn
@@ -48,17 +494,60 @@ Resources:
 
   TelemetryDeadLetterQueue:
     Type: AWS::SQS::Queue
-    Properties:
-      QueueName: marketpulse-telemetry-dlq
+    Condition: CreateTelemetryQueues
 
   # ==========================================================
   # 3. Amazon SNS - Campaign Budget Exhaustion Alert Topic
   # ==========================================================
   BudgetAlertsTopic:
     Type: AWS::SNS::Topic
+    Condition: CreateBudgetAlertsTopic
     Properties:
-      TopicName: marketpulse-campaign-budget-alerts
       DisplayName: MarketPulse Budget Alerts
+
+  BudgetAlertEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlertEmail
+    Properties:
+      TopicArn: !If [CreateBudgetAlertsTopic, !Ref BudgetAlertsTopic, !Ref ExistingBudgetAlertsTopicArn]
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  MarketPulseUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub '${AWS::StackName}-admins'
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      DeletionProtection: ACTIVE
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          RequireUppercase: true
+
+  MarketPulseUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref MarketPulseUserPool
+      ClientName: !Sub '${AWS::StackName}-web'
+      GenerateSecret: false
+      PreventUserExistenceErrors: ENABLED
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      AccessTokenValidity: 60
+      IdTokenValidity: 60
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: days
 
   # ==========================================================
   # 4. Amazon API Gateway - REST Ingestion API
@@ -68,10 +557,20 @@ Resources:
     Properties:
       StageName: v1
       TracingEnabled: true # AWS X-Ray Tracing enabled on API Gateway
+      Auth:
+        Authorizers:
+          MarketPulseCognitoAuthorizer:
+            UserPoolArn: !GetAtt MarketPulseUserPool.Arn
       Cors:
-        AllowMethods: "'POST, GET, OPTIONS'"
+        AllowMethods: "'POST, GET, DELETE, OPTIONS'"
         AllowHeaders: "'Content-Type, X-Amz-Date, Authorization, X-Api-Key, X-Amzn-Trace-Id'"
         AllowOrigin: "'*'"
+      MethodSettings:
+        - ResourcePath: '/*'
+          HttpMethod: '*'
+          ThrottlingRateLimit: 10
+          ThrottlingBurstLimit: 20
+          MetricsEnabled: true
 
   # ==========================================================
   # 5. AWS Lambda - Stream Processor (SQS -> RDS + Redis + SNS)
@@ -79,21 +578,42 @@ Resources:
   StreamProcessorFunction:
     Type: AWS::Serverless::Function
     Properties:
-      Handler: aws/lambdas/stream-processor.handler
+      CodeUri: lambdas/
+      Handler: stream-processor.handler
       Description: Ingests SQS telemetry batches, updates RDS PostgreSQL and ElastiCache Redis
+      MemorySize: 512
+      ReservedConcurrentExecutions: 2
+      VpcConfig:
+        SecurityGroupIds: [!GetAtt LambdaSecurityGroup.GroupId]
+        SubnetIds: [!Ref PublicSubnetA, !Ref PublicSubnetB]
+      Environment:
+        Variables:
+          DB_SECRET_ARN: !Ref DatabaseSecret
+          DB_HOST: !GetAtt TelemetryDatabase.Endpoint.Address
+          DB_NAME: marketpulse
+          DB_SSL: 'true'
+          REDIS_SECRET_ARN: !Ref RedisSecret
+          REDIS_ENDPOINT: !GetAtt TelemetryCache.PrimaryEndPoint.Address
+          REDIS_PORT: !GetAtt TelemetryCache.PrimaryEndPoint.Port
+          REDIS_TLS: 'true'
       Policies:
         - SQSPollerPolicy:
-            QueueName: !GetAtt TelemetryEventQueue.QueueName
+            QueueName: !If [CreateTelemetryQueues, !GetAtt TelemetryEventQueue.QueueName, !Ref ExistingTelemetryQueueName]
         - SNSPublishMessagePolicy:
-            TopicName: !GetAtt BudgetAlertsTopic.TopicName
+            TopicName: !If [CreateBudgetAlertsTopic, !GetAtt BudgetAlertsTopic.TopicName, !Ref ExistingBudgetAlertsTopicName]
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: [!Ref DatabaseSecret, !Ref RedisSecret]
         - AWSXRayDaemonWriteAccess
       Events:
         SQSEvent:
           Type: SQS
           Properties:
-            Queue: !GetAtt TelemetryEventQueue.Arn
-            BatchSize: 20
+            Queue: !If [CreateTelemetryQueues, !GetAtt TelemetryEventQueue.Arn, !Ref ExistingTelemetryQueueArn]
+            BatchSize: 10
             MaximumBatchingWindowInSeconds: 5
+            FunctionResponseTypes: [ReportBatchItemFailures]
 
   # ==========================================================
   # 6. AWS Lambda - Excel Batch Importer (S3 -> RDS)
@@ -101,12 +621,36 @@ Resources:
   ExcelImporterFunction:
     Type: AWS::Serverless::Function
     Properties:
-      Handler: aws/lambdas/excel-importer.handler
+      CodeUri: lambdas/
+      Handler: excel-importer.handler
       Description: Triggered by S3 upload via EventBridge to parse and bulk-load Excel into RDS
+      Timeout: 180
+      MemorySize: 1024
+      ReservedConcurrentExecutions: 1
+      VpcConfig:
+        SecurityGroupIds: [!GetAtt LambdaSecurityGroup.GroupId]
+        SubnetIds: [!Ref PublicSubnetA, !Ref PublicSubnetB]
+      Environment:
+        Variables:
+          DB_SECRET_ARN: !Ref DatabaseSecret
+          DB_HOST: !GetAtt TelemetryDatabase.Endpoint.Address
+          DB_NAME: marketpulse
+          DB_SSL: 'true'
+          REDIS_SECRET_ARN: !Ref RedisSecret
+          REDIS_ENDPOINT: !GetAtt TelemetryCache.PrimaryEndPoint.Address
+          REDIS_PORT: !GetAtt TelemetryCache.PrimaryEndPoint.Port
+          REDIS_TLS: 'true'
+          ALLOWED_ORIGINS: !Sub 'http://localhost:8080,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8082,https://${WebDistribution.DomainName}'
       Policies:
         - S3ReadPolicy:
-            BucketName: !Sub "marketpulse-offline-imports-${AWS::AccountId}"
+            BucketName: !If [CreateOfflineImportBucket, !Ref OfflineImportBucket, !Ref ExistingImportBucketName]
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: [!Ref DatabaseSecret, !Ref RedisSecret]
         - AWSXRayDaemonWriteAccess
+        - SNSPublishMessagePolicy:
+            TopicName: !If [CreateBudgetAlertsTopic, !GetAtt BudgetAlertsTopic.TopicName, !Ref ExistingBudgetAlertsTopicName]
       Events:
         S3UploadEvent:
           Type: EventBridgeRule
@@ -119,7 +663,7 @@ Resources:
               detail:
                 bucket:
                   name:
-                    - !Ref OfflineImportBucket
+                    - !If [CreateOfflineImportBucket, !Ref OfflineImportBucket, !Ref ExistingImportBucketName]
 
   # ==========================================================
   # 7. AWS Lambda - Pre-signed URL Generator for S3 Uploads
@@ -127,11 +671,16 @@ Resources:
   PresignedUrlFunction:
     Type: AWS::Serverless::Function
     Properties:
-      Handler: aws/lambdas/presigned-url.handler
+      CodeUri: lambdas/
+      Handler: presigned-url.handler
       Description: Issues secure temporary S3 PUT URLs for direct browser spreadsheet uploads
+      ReservedConcurrentExecutions: 1
+      Environment:
+        Variables:
+          ALLOWED_ORIGINS: !Sub 'http://localhost:8080,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8082,https://${WebDistribution.DomainName}'
       Policies:
         - S3WritePolicy:
-            BucketName: !Sub "marketpulse-offline-imports-${AWS::AccountId}"
+            BucketName: !If [CreateOfflineImportBucket, !Ref OfflineImportBucket, !Ref ExistingImportBucketName]
         - AWSXRayDaemonWriteAccess
       Events:
         ApiEvent:
@@ -140,6 +689,297 @@ Resources:
             RestApiId: !Ref MarketPulseApi
             Path: /imports/presigned-url
             Method: post
+            Auth:
+              Authorizer: MarketPulseCognitoAuthorizer
+
+  CustomerApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/
+      Handler: customer-api.handler
+      Description: Creates or resolves a customer record for the public VoltStore registration flow
+      ReservedConcurrentExecutions: 2
+      VpcConfig:
+        SecurityGroupIds: [!GetAtt LambdaSecurityGroup.GroupId]
+        SubnetIds: [!Ref PublicSubnetA, !Ref PublicSubnetB]
+      Environment:
+        Variables:
+          DB_SECRET_ARN: !Ref DatabaseSecret
+          DB_HOST: !GetAtt TelemetryDatabase.Endpoint.Address
+          DB_NAME: marketpulse
+          DB_SSL: 'true'
+          ALLOWED_ORIGINS: !Sub 'http://localhost:8080,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8082,https://${WebDistribution.DomainName}'
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref DatabaseSecret
+        - AWSXRayDaemonWriteAccess
+      Events:
+        CustomerRegistrationApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MarketPulseApi
+            Path: /customers
+            Method: post
+
+  TelemetryIngressFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/
+      Handler: telemetry-ingress.handler
+      Description: Validates telemetry and queues events for asynchronous processing
+      Timeout: 15
+      ReservedConcurrentExecutions: 2
+      Environment:
+        Variables:
+          TELEMETRY_QUEUE_URL: !If [CreateTelemetryQueues, !Ref TelemetryEventQueue, !Ref ExistingTelemetryQueueUrl]
+          ALLOWED_ORIGINS: !Sub 'http://localhost:8080,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8082,https://${WebDistribution.DomainName}'
+      Policies:
+        - SQSSendMessagePolicy:
+            QueueName: !If [CreateTelemetryQueues, !GetAtt TelemetryEventQueue.QueueName, !Ref ExistingTelemetryQueueName]
+        - AWSXRayDaemonWriteAccess
+      Events:
+        TelemetryApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MarketPulseApi
+            Path: /events
+            Method: post
+
+  AnalyticsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/
+      Handler: analytics.handler
+      Description: Serves authenticated aggregates and recent telemetry from PostgreSQL
+      ReservedConcurrentExecutions: 1
+      VpcConfig:
+        SecurityGroupIds: [!GetAtt LambdaSecurityGroup.GroupId]
+        SubnetIds: [!Ref PublicSubnetA, !Ref PublicSubnetB]
+      Environment:
+        Variables:
+          DB_SECRET_ARN: !Ref DatabaseSecret
+          DB_HOST: !GetAtt TelemetryDatabase.Endpoint.Address
+          DB_NAME: marketpulse
+          DB_SSL: 'true'
+          ALLOWED_ORIGINS: !Sub 'http://localhost:8080,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8082,https://${WebDistribution.DomainName}'
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref DatabaseSecret
+        - AWSXRayDaemonWriteAccess
+      Events:
+        AnalyticsApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MarketPulseApi
+            Path: /analytics
+            Method: get
+            Auth:
+              Authorizer: MarketPulseCognitoAuthorizer
+
+  CacheAnalyticsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/
+      Handler: cache-analytics.handler
+      Description: Serves authenticated Redis counters and cache read timing
+      ReservedConcurrentExecutions: 1
+      VpcConfig:
+        SecurityGroupIds: [!GetAtt LambdaSecurityGroup.GroupId]
+        SubnetIds: [!Ref PublicSubnetA, !Ref PublicSubnetB]
+      Environment:
+        Variables:
+          REDIS_SECRET_ARN: !Ref RedisSecret
+          REDIS_ENDPOINT: !GetAtt TelemetryCache.PrimaryEndPoint.Address
+          REDIS_PORT: !GetAtt TelemetryCache.PrimaryEndPoint.Port
+          REDIS_TLS: 'true'
+          ALLOWED_ORIGINS: !Sub 'http://localhost:8080,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8082,https://${WebDistribution.DomainName}'
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref RedisSecret
+        - AWSXRayDaemonWriteAccess
+      Events:
+        CacheAnalyticsApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MarketPulseApi
+            Path: /cache
+            Method: get
+            Auth:
+              Authorizer: MarketPulseCognitoAuthorizer
+
+  SnsTestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/
+      Handler: sns-test.handler
+      Description: Publishes an authenticated test message to confirmed SNS email subscribers
+      ReservedConcurrentExecutions: 1
+      Environment:
+        Variables:
+          ALLOWED_ORIGINS: !Sub 'http://localhost:8080,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8082,https://${WebDistribution.DomainName}'
+      Policies:
+        - SNSPublishMessagePolicy:
+            TopicName: !If [CreateBudgetAlertsTopic, !GetAtt BudgetAlertsTopic.TopicName, !Ref ExistingBudgetAlertsTopicName]
+        - AWSXRayDaemonWriteAccess
+      Events:
+        SnsTestApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MarketPulseApi
+            Path: /alerts/test
+            Method: post
+            Auth:
+              Authorizer: MarketPulseCognitoAuthorizer
+
+  AwsDataApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/
+      Handler: data-api.handler
+      Description: Authenticated CRUD access to MarketPulse RDS dimension tables
+      MemorySize: 512
+      ReservedConcurrentExecutions: 2
+      VpcConfig:
+        SecurityGroupIds: [!GetAtt LambdaSecurityGroup.GroupId]
+        SubnetIds: [!Ref PublicSubnetA, !Ref PublicSubnetB]
+      Environment:
+        Variables:
+          DB_SECRET_ARN: !Ref DatabaseSecret
+          DB_HOST: !GetAtt TelemetryDatabase.Endpoint.Address
+          DB_NAME: marketpulse
+          DB_SSL: 'true'
+          ALLOWED_ORIGINS: !Sub 'http://localhost:8080,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8082,https://${WebDistribution.DomainName}'
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref DatabaseSecret
+        - AWSXRayDaemonWriteAccess
+      Events:
+        DataGetApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MarketPulseApi
+            Path: /data/{entity}
+            Method: get
+            Auth:
+              Authorizer: MarketPulseCognitoAuthorizer
+        PublicCatalogApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MarketPulseApi
+            Path: /catalog/{entity}
+            Method: get
+        DataPostApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MarketPulseApi
+            Path: /data/{entity}
+            Method: post
+            Auth:
+              Authorizer: MarketPulseCognitoAuthorizer
+        DataDeleteApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MarketPulseApi
+            Path: /data/{entity}
+            Method: delete
+            Auth:
+              Authorizer: MarketPulseCognitoAuthorizer
+
+  StreamProcessorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${StreamProcessorFunction}'
+      RetentionInDays: 7
+
+  ExcelImporterLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${ExcelImporterFunction}'
+      RetentionInDays: 7
+
+  PresignedUrlLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${PresignedUrlFunction}'
+      RetentionInDays: 7
+
+  CustomerApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${CustomerApiFunction}'
+      RetentionInDays: 7
+
+  TelemetryIngressLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${TelemetryIngressFunction}'
+      RetentionInDays: 7
+
+  AnalyticsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AnalyticsFunction}'
+      RetentionInDays: 7
+
+  CacheAnalyticsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${CacheAnalyticsFunction}'
+      RetentionInDays: 7
+
+  SnsTestLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${SnsTestFunction}'
+      RetentionInDays: 7
+
+  AwsDataApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AwsDataApiFunction}'
+      RetentionInDays: 7
+
+  DeadLetterQueueAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Telemetry messages are waiting in the dead-letter queue
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !If [CreateTelemetryQueues, !GetAtt TelemetryDeadLetterQueue.QueueName, !Ref ExistingDeadLetterQueueName]
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!If [CreateBudgetAlertsTopic, !Ref BudgetAlertsTopic, !Ref ExistingBudgetAlertsTopicArn]]
+
+  DatabaseCpuAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: PostgreSQL CPU has remained above 80 percent
+      Namespace: AWS/RDS
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref TelemetryDatabase
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!If [CreateBudgetAlertsTopic, !Ref BudgetAlertsTopic, !Ref ExistingBudgetAlertsTopicArn]]
 
 Outputs:
   ApiEndpoint:
@@ -147,10 +987,37 @@ Outputs:
     Value: !Sub "https://${MarketPulseApi}.execute-api.${AWS::Region}.amazonaws.com/v1"
   SQSQueueUrl:
     Description: URL of Amazon SQS Telemetry Queue
-    Value: !Ref TelemetryEventQueue
+    Value: !If [CreateTelemetryQueues, !Ref TelemetryEventQueue, !Ref ExistingTelemetryQueueUrl]
   S3BucketName:
     Description: Name of S3 Bucket for Offline Excel Imports
-    Value: !Ref OfflineImportBucket
+    Value: !If [CreateOfflineImportBucket, !Ref OfflineImportBucket, !Ref ExistingImportBucketName]
   SNSTopicArn:
     Description: ARN of SNS Budget Alerts Topic
-    Value: !Ref BudgetAlertsTopic
+    Value: !If [CreateBudgetAlertsTopic, !Ref BudgetAlertsTopic, !Ref ExistingBudgetAlertsTopicArn]
+  UserPoolId:
+    Description: Cognito User Pool ID for web authentication
+    Value: !Ref MarketPulseUserPool
+  UserPoolClientId:
+    Description: Cognito public web client ID
+    Value: !Ref MarketPulseUserPoolClient
+  UserPoolRegion:
+    Description: Cognito region
+    Value: !Ref AWS::Region
+  DatabaseEndpoint:
+    Description: PostgreSQL endpoint address
+    Value: !GetAtt TelemetryDatabase.Endpoint.Address
+  RedisEndpoint:
+    Description: Redis primary endpoint address
+    Value: !GetAtt TelemetryCache.PrimaryEndPoint.Address
+  WebBucketName:
+    Description: Private S3 bucket for CloudFront web assets
+    Value: !Ref WebBucket
+  CloudFrontUrl:
+    Description: HTTPS URL for the web application
+    Value: !Sub 'https://${WebDistribution.DomainName}'
+  Ec2InstanceId:
+    Description: EC2 demo host instance ID (managed through Systems Manager)
+    Value: !Ref Ec2DemoInstance
+  Ec2PublicUrl:
+    Description: HTTP URL for the EC2 demo host
+    Value: !Sub 'http://${Ec2DemoInstance.PublicDnsName}'

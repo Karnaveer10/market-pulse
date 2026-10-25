@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { DollarSign, Megaphone, Users, MousePointerClick, FileSpreadsheet, ShoppingBag } from 'lucide-react';
+import { DollarSign, Megaphone, Users, MousePointerClick, FileSpreadsheet, ShoppingBag, BellRing, Radio } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -14,20 +14,86 @@ import { useInteractions, type InteractionRow } from '@/hooks/use-interactions';
 import { useCampaigns } from '@/hooks/use-campaigns';
 import { useCustomers } from '@/hooks/use-customers';
 import { channelComparisonData, campaignPerformanceData } from '@/lib/mock-data';
+import { isAwsAnalyticsConfigured, useAwsAnalytics } from '@/hooks/use-aws-analytics';
+import { useAwsCache } from '@/hooks/use-aws-cache';
+import { awsDataRequest } from '@/lib/aws-data-api';
+import { isAwsTelemetrySyncEnabled, setAwsTelemetrySyncEnabled } from '@/lib/telemetry-service';
+import { toast } from 'sonner';
 
 export default function DashboardPage() {
   const { data: interactions = [] } = useInteractions();
   const { data: campaigns = [] } = useCampaigns();
   const { data: customers = [] } = useCustomers();
+  const { data: awsAnalytics, isLoading: awsAnalyticsLoading, error: awsAnalyticsError } = useAwsAnalytics();
+  const { data: awsCache } = useAwsCache();
+  const awsAnalyticsEnabled = isAwsAnalyticsConfigured();
   const [offlineModalOpen, setOfflineModalOpen] = useState(false);
+  const [sendingTestAlert, setSendingTestAlert] = useState(false);
+  const [awsTelemetrySync, setAwsTelemetrySync] = useState(isAwsTelemetrySyncEnabled);
 
-  const totalRevenue = interactions.reduce((sum, i) => sum + Number(i.revenue), 0);
+  const sendTestAlert = async () => {
+    setSendingTestAlert(true);
+    try {
+      await awsDataRequest('/alerts/test', { method: 'POST', body: '{}' });
+      toast.success('SNS test alert published. Confirm the email subscription to receive messages.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'SNS test alert could not be sent.');
+    } finally {
+      setSendingTestAlert(false);
+    }
+  };
+
+  const displayInteractions: InteractionRow[] = awsAnalyticsEnabled
+    ? (awsAnalytics?.recent || []).map((row) => ({
+      id: row.id,
+      type: row.type,
+      revenue: Number(row.revenue),
+      date: row.date,
+      customer_id: null,
+      product_id: null,
+      campaign_id: row.campaign_id,
+      channel_id: row.channel_id,
+      customers: row.customer_name ? { name: row.customer_name } : null,
+      products: row.product_name ? { name: row.product_name } : null,
+      campaigns: row.campaign_name ? { name: row.campaign_name } : null,
+      channels: row.channel_name ? { name: row.channel_name } : null,
+    }))
+    : interactions;
+  const totalRevenue = awsAnalyticsEnabled
+    ? Number(awsAnalytics?.summary.revenue || 0)
+    : interactions.reduce((sum, i) => sum + Number(i.revenue), 0);
+  const dataSource = !awsAnalyticsEnabled
+    ? 'Local app database'
+    : awsAnalyticsError
+      ? 'AWS analytics unavailable'
+      : awsAnalyticsLoading
+        ? 'Loading AWS data…'
+        : 'AWS RDS PostgreSQL';
+  const totalInteractions = awsAnalyticsEnabled && awsCache?.totals.interactions !== undefined
+    ? Number(awsCache.totals.interactions)
+    : Number(awsAnalytics?.summary.interactions || 0);
+  const interactionMetricSource = awsAnalyticsEnabled && awsCache
+    ? `Redis read ${awsCache.readLatencyMs.toFixed(2)} ms`
+    : dataSource;
+  const campaignChartData = awsAnalyticsEnabled
+    ? [{
+      month: 'All time',
+      ...Object.fromEntries((awsAnalytics?.campaigns || []).map((row) => [row.campaign, Number(row.revenue)])),
+    }]
+    : campaignPerformanceData;
+  const channelChartData = awsAnalyticsEnabled
+    ? (awsAnalytics?.channels || []).map((row) => ({
+      channel: row.channel,
+      revenue: Number(row.revenue),
+      interactions: Number(row.interactions),
+    }))
+    : channelComparisonData;
 
   const metrics = [
-    { title: 'Total Revenue', value: `₹${totalRevenue.toLocaleString('en-IN')}`, change: 'Live from RDS PostgreSQL', changeType: 'positive' as const, icon: DollarSign },
-    { title: 'Total Campaigns', value: String(campaigns.length), change: 'Live from RDS PostgreSQL', changeType: 'positive' as const, icon: Megaphone },
-    { title: 'Total Customers', value: String(customers.length), change: 'Live from RDS PostgreSQL', changeType: 'positive' as const, icon: Users },
-    { title: 'Total Interactions', value: String(interactions.length), change: 'Live from RDS PostgreSQL', changeType: 'positive' as const, icon: MousePointerClick },
+    { title: 'Total Revenue', value: `₹${totalRevenue.toLocaleString('en-IN')}`, change: dataSource, changeType: 'positive' as const, icon: DollarSign },
+    { title: 'Total Campaigns', value: String(awsAnalyticsEnabled ? awsAnalytics?.summary.campaigns || 0 : campaigns.length), change: dataSource, changeType: 'positive' as const, icon: Megaphone },
+    { title: 'Total Customers', value: String(awsAnalyticsEnabled ? awsAnalytics?.summary.customers || 0 : customers.length), change: dataSource, changeType: 'positive' as const, icon: Users },
+    { title: 'Total Interactions', value: String(awsAnalyticsEnabled ? totalInteractions : interactions.length), change: interactionMetricSource, changeType: 'positive' as const, icon: MousePointerClick },
   ];
 
   const recentColumns = [
@@ -49,6 +115,28 @@ export default function DashboardPage() {
           <p className="page-subheader">Overview of omnichannel marketing & revenue performance</p>
         </div>
         <div className="flex items-center gap-2">
+          {awsAnalyticsEnabled && (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                aria-pressed={awsTelemetrySync}
+                onClick={() => {
+                  const enabled = !awsTelemetrySync;
+                  setAwsTelemetrySyncEnabled(enabled);
+                  setAwsTelemetrySync(enabled);
+                }}
+                className="gap-2 text-xs"
+              >
+                <Radio className="w-4 h-4" />
+                AWS telemetry {awsTelemetrySync ? 'on' : 'off'}
+              </Button>
+              <Button variant="outline" size="sm" onClick={sendTestAlert} disabled={sendingTestAlert} className="gap-2 text-xs">
+                <BellRing className="w-4 h-4" />
+                {sendingTestAlert ? 'Sending alert…' : 'Send SNS test alert'}
+              </Button>
+            </>
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -77,15 +165,21 @@ export default function DashboardPage() {
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="bg-card border border-border rounded-xl p-5">
           <h3 className="text-sm font-semibold mb-4">Campaign Performance</h3>
           <ResponsiveContainer width="100%" height={280}>
-            <LineChart data={campaignPerformanceData}>
+            <LineChart data={campaignChartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis dataKey="month" stroke="hsl(var(--muted-foreground))" fontSize={12} />
               <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} tickFormatter={(v) => `₹${v/1000}k`} />
               <Tooltip contentStyle={{ backgroundColor: 'hsl(var(--card))', border: '1px solid hsl(var(--border))', borderRadius: '8px', fontSize: '12px' }} />
               <Legend />
-              <Line type="monotone" dataKey="Diwali Mega Sale" stroke="hsl(var(--chart-1))" strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="Festive Blitz" stroke="hsl(var(--chart-2))" strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="Monsoon Bonanza" stroke="hsl(var(--chart-3))" strokeWidth={2} dot={false} />
+              {awsAnalyticsEnabled
+                ? (awsAnalytics?.campaigns || []).map((row, index) => (
+                  <Line key={row.campaign} type="monotone" dataKey={row.campaign} stroke={`hsl(var(--chart-${(index % 4) + 1}))`} strokeWidth={2} dot={false} />
+                ))
+                : <>
+                  <Line type="monotone" dataKey="Spring Launch" stroke="hsl(var(--chart-1))" strokeWidth={2} dot={false} />
+                  <Line type="monotone" dataKey="Social Blitz" stroke="hsl(var(--chart-2))" strokeWidth={2} dot={false} />
+                  <Line type="monotone" dataKey="Email Nurture" stroke="hsl(var(--chart-3))" strokeWidth={2} dot={false} />
+                </>}
             </LineChart>
           </ResponsiveContainer>
         </motion.div>
@@ -93,7 +187,7 @@ export default function DashboardPage() {
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }} className="bg-card border border-border rounded-xl p-5">
           <h3 className="text-sm font-semibold mb-4">Channel Comparison</h3>
           <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={channelComparisonData}>
+            <BarChart data={channelChartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis dataKey="channel" stroke="hsl(var(--muted-foreground))" fontSize={12} />
               <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} />
@@ -108,7 +202,7 @@ export default function DashboardPage() {
 
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }}>
         <h3 className="text-sm font-semibold mb-3">Recent Interactions</h3>
-        <DataTable data={interactions.slice(0, 8) as any} columns={recentColumns as any} />
+        <DataTable data={displayInteractions} columns={recentColumns} />
       </motion.div>
 
       <OfflineImportModal

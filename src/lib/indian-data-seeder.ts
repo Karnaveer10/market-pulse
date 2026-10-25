@@ -1,4 +1,114 @@
 import { supabase } from '@/integrations/supabase/client';
+import { awsDataRequest, awsPublicRequest, isAwsDataApiConfigured } from '@/lib/aws-data-api';
+
+type SeedRecord = { id: string; name: string };
+let awsSeedPromise: Promise<void> | undefined;
+
+export function seedAwsIndianDataIfEmpty(): Promise<void> {
+  if (!isAwsDataApiConfigured()) return Promise.resolve();
+  if (!awsSeedPromise) {
+    awsSeedPromise = seedAwsData().catch((error) => {
+      awsSeedPromise = undefined;
+      throw error;
+    });
+  }
+  return awsSeedPromise;
+}
+
+async function seedAwsData() {
+  const [productsBefore, campaignsBefore, customersBefore, channelsBefore] = await Promise.all([
+    awsDataRequest<SeedRecord[]>('/data/products'),
+    awsDataRequest<SeedRecord[]>('/data/campaigns'),
+    awsDataRequest<SeedRecord[]>('/data/customers'),
+    awsDataRequest<SeedRecord[]>('/data/channels'),
+  ]);
+
+  let products = productsBefore;
+  let campaigns = campaignsBefore;
+  let customers = customersBefore;
+  let channels = channelsBefore;
+  const isEmpty = products.length + campaigns.length + customers.length + channels.length === 0;
+  if (isEmpty) {
+    products = await awsDataRequest<SeedRecord[]>('/data/products', {
+      method: 'POST',
+      body: JSON.stringify([
+        { name: 'Nexus Smart Watch Pro', category: 'Electronics', price: 4999, status: 'active' },
+        { name: 'AeroNoise ANC Earbuds', category: 'Audio', price: 2499, status: 'active' },
+        { name: 'Kavach Ultra PowerBank 20k', category: 'Accessories', price: 1499, status: 'active' },
+        { name: 'VoltFast GaN 65W Charger', category: 'Accessories', price: 1899, status: 'active' },
+        { name: 'GamerX MechStrike Keyboard', category: 'Gaming', price: 3499, status: 'active' },
+        { name: 'EyeSafe 2K Smart Home Camera', category: 'Smart Home', price: 2199, status: 'active' },
+      ]),
+    });
+    channels = await awsDataRequest<SeedRecord[]>('/data/channels', {
+      method: 'POST',
+      body: JSON.stringify([
+        { name: 'Instagram Sponsored Ads', type: 'online', platform: 'Instagram Feed & Reels' },
+        { name: 'YouTube Tech Reviews', type: 'online', platform: 'YouTube Influencers' },
+        { name: 'Google Search CPC', type: 'online', platform: 'Google Ads' },
+        { name: 'WhatsApp & Email Blast', type: 'online', platform: 'WhatsApp Business API' },
+        { name: 'Bengaluru Metro Billboards', type: 'offline', platform: 'Namma Metro Phase 2' },
+        { name: 'Croma & Reliance Digital In-Store', type: 'offline', platform: 'Retail Store POS' },
+        { name: 'Delhi NCR Mall Kiosks', type: 'offline', platform: 'Select Citywalk Kiosk' },
+      ]),
+    });
+    customers = await awsDataRequest<SeedRecord[]>('/data/customers', {
+      method: 'POST',
+      body: JSON.stringify([
+        { name: 'Aarav Sharma', email: 'aarav.sharma@gmail.com', location: 'Bengaluru, Karnataka', phones: ['+91 98765 43210'], joined_at: '2024-01-15' },
+        { name: 'Ananya Deshmukh', email: 'ananya.deshmukh@yahoo.in', location: 'Mumbai, Maharashtra', phones: ['+91 98230 11223'], joined_at: '2024-02-01' },
+        { name: 'Rohan Verma', email: 'rohan.verma@outlook.com', location: 'Delhi NCR', phones: ['+91 99112 44556'], joined_at: '2024-02-20' },
+        { name: 'Priya Iyer', email: 'priya.iyer@gmail.com', location: 'Chennai, Tamil Nadu', phones: ['+91 94441 77889'], joined_at: '2024-03-05' },
+        { name: 'Kabir Patel', email: 'kabir.patel@gmail.com', location: 'Ahmedabad, Gujarat', phones: ['+91 97250 99887'], joined_at: '2024-03-18' },
+        { name: 'Neha Sundaram', email: 'neha.sundaram@gmail.com', location: 'Hyderabad, Telangana', phones: ['+91 98490 66554'], joined_at: '2024-04-02' },
+        { name: 'Aditya Chatterjee', email: 'aditya.c@gmail.com', location: 'Kolkata, West Bengal', phones: ['+91 98301 23456'], joined_at: '2024-04-12' },
+      ]),
+    });
+    campaigns = await awsDataRequest<SeedRecord[]>('/data/campaigns', {
+      method: 'POST',
+      body: JSON.stringify([
+        { name: 'Diwali Mega Dhamaka Sale', status: 'active', budget: 150000, spent: 0, start_date: '2024-10-01', end_date: '2026-12-31', product_id: products[0]?.id },
+        { name: 'Great Indian Festive Blitz', status: 'active', budget: 80000, spent: 0, start_date: '2024-09-15', end_date: '2026-12-31', product_id: products[1]?.id },
+        { name: 'Monsoon Tech Bonanza', status: 'active', budget: 50000, spent: 0, start_date: '2024-07-01', end_date: '2026-12-31', product_id: products[2]?.id },
+      ]),
+    });
+  }
+
+  const findId = (records: SeedRecord[], name: string) => records.find((record) => record.name === name)?.id;
+  const sampleEvents = [
+    { id: 'marketpulse-demo-seed-v1-purchase', type: 'purchase', customer: 'Aarav Sharma', product: 'Nexus Smart Watch Pro', campaign: 'Diwali Mega Dhamaka Sale', channel: 'Google Search CPC', revenue: 4999, cost: 0 },
+    { id: 'marketpulse-demo-seed-v1-click', type: 'click', customer: 'Ananya Deshmukh', product: 'AeroNoise ANC Earbuds', campaign: 'Great Indian Festive Blitz', channel: 'Instagram Sponsored Ads', revenue: 0, cost: 15 },
+    { id: 'marketpulse-demo-seed-v1-visit', type: 'visit', customer: 'Rohan Verma', product: 'Kavach Ultra PowerBank 20k', campaign: 'Monsoon Tech Bonanza', channel: 'YouTube Tech Reviews', revenue: 0, cost: 0 },
+    { id: 'marketpulse-demo-seed-v1-offline', type: 'purchase', customer: 'Priya Iyer', product: 'Nexus Smart Watch Pro', campaign: 'Diwali Mega Dhamaka Sale', channel: 'Croma & Reliance Digital In-Store', revenue: 4999, cost: 0 },
+  ];
+  for (const sample of sampleEvents) {
+    const customer = customers.find((record) => record.name === sample.customer);
+    const product = products.find((record) => record.name === sample.product);
+    const campaign = campaigns.find((record) => record.name === sample.campaign);
+    const channel = channels.find((record) => record.name === sample.channel);
+    if (!customer || !product || !campaign || !channel) continue;
+    await awsPublicRequest('/events', {
+      method: 'POST',
+      body: JSON.stringify({
+        id: sample.id,
+        type: sample.type,
+        timestamp: new Date().toISOString(),
+        customer_id: customer.id,
+        customer_email: 'email' in customer ? customer.email : undefined,
+        customer_name: customer.name,
+        product_id: product.id,
+        product_name: product.name,
+        campaign_id: campaign.id,
+        campaign_name: campaign.name,
+        channel_id: channel.id,
+        channel_name: channel.name,
+        revenue: sample.revenue,
+        cost: sample.cost,
+        campaign_budget: 'budget' in campaign ? campaign.budget : 0,
+      }),
+    });
+  }
+}
 
 export async function seedIndianDataIfEmpty() {
   try {

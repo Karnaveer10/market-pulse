@@ -1,6 +1,7 @@
 export interface TelemetryEvent {
   type: 'visit' | 'click' | 'lead' | 'cart_add' | 'purchase';
   customer_name?: string;
+  customer_id?: string;
   customer_email?: string;
   customer_phone?: string;
   product_id?: string;
@@ -11,6 +12,7 @@ export interface TelemetryEvent {
   channel_name?: string;
   revenue?: number;
   cost?: number; // e.g. CPC cost
+  campaign_budget?: number;
   metadata?: Record<string, unknown>;
 }
 
@@ -38,6 +40,16 @@ export interface XRayTrace {
 }
 
 const STORAGE_KEY = 'marketpulse_xray_traces_v1';
+const AWS_TELEMETRY_SYNC_KEY = 'marketpulse_aws_telemetry_sync_v1';
+
+export function isAwsTelemetrySyncEnabled(): boolean {
+  return Boolean(import.meta.env.VITE_AWS_API_GATEWAY_URL)
+    && (typeof localStorage === 'undefined' || localStorage.getItem(AWS_TELEMETRY_SYNC_KEY) !== 'false');
+}
+
+export function setAwsTelemetrySyncEnabled(enabled: boolean): void {
+  if (typeof localStorage !== 'undefined') localStorage.setItem(AWS_TELEMETRY_SYNC_KEY, String(enabled));
+}
 
 // Seed default traces so the X-Ray modal is NEVER blank on initial load
 const DEFAULT_TRACES: XRayTrace[] = [
@@ -356,24 +368,57 @@ export async function dispatchTelemetryEvent(event: TelemetryEvent): Promise<{
   persistTraces();
   traceListeners.forEach((l) => l([...XRAY_TRACES]));
 
-  // Optional Fire-and-forget to live AWS API Gateway endpoint
-  try {
-    fetch('https://awhhbnom53.execute-api.ap-south-1.amazonaws.com', {
+  // When configured, send the event to the real AWS ingestion endpoint.
+  // API acceptance only confirms API Gateway queued the message; processing is asynchronous.
+  const awsApiBase = import.meta.env.VITE_AWS_API_GATEWAY_URL?.replace(/\/+$/, '');
+  if (awsApiBase && isAwsTelemetrySyncEnabled()) {
+    const requestStarted = performance.now();
+    const response = await fetch(`${awsApiBase}/events`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        trace_id: traceId,
-        event_type: event.type,
-        revenue: event.revenue || 0,
-        customer_name: event.customer_name || 'Aarav Sharma',
+        id: traceId,
+        type: event.type,
+        revenue: event.revenue ?? 0,
+        cost: event.cost ?? 0,
+        campaign_budget: event.campaign_budget ?? 0,
+        customer_name: event.customer_name,
+        customer_id: event.customer_id,
+        customer_email: event.customer_email,
+        product_id: event.product_id,
+        product_name: event.product_name,
+        campaign_id: event.campaign_id,
+        campaign_name: event.campaign_name,
+        channel_id: event.channel_id,
+        channel_name: event.channel_name,
         timestamp: new Date().toISOString(),
       }),
-      mode: 'no-cors',
-    }).catch(() => {
-      // Offline/CORS safe fallback
     });
-  } catch {
-    // Silent safe fallback
+    if (!response.ok) {
+      throw new Error(`AWS telemetry ingestion failed (HTTP ${response.status})`);
+    }
+    const acceptedAt = performance.now();
+    const elapsed = Math.max(0, Math.round(acceptedAt - requestStarted));
+    trace.total_duration_ms = elapsed;
+    trace.timestamp = new Date().toLocaleTimeString();
+    trace.segments = [
+      {
+        id: `seg-client-${traceId}`,
+        name: 'Browser Client (HTTP POST)',
+        start_time: 0,
+        end_time: elapsed,
+        duration_ms: elapsed,
+        status: 'ok',
+      },
+      {
+        id: `seg-apigw-${traceId}`,
+        name: 'API Gateway → SQS (accepted)',
+        start_time: 0,
+        end_time: elapsed,
+        duration_ms: elapsed,
+        status: 'ok',
+      },
+    ];
   }
 
   return { success: true, trace };
